@@ -1,0 +1,382 @@
+# Agent Portal 🐯
+
+A browser chat portal that talks **directly to OpenClaw agents** — no Telegram,
+no channel plugins. Open it, pick an agent, and you're chatting with that
+agent's **main session** (`agent:<agentId>:main`). History is the agent's real
+session history; replies stream live.
+
+> **📦 Replicating this on another server?** See [`REPLICATION.md`](REPLICATION.md)
+> + `./bootstrap.sh` — one command per server, code copies, state never does.
+
+## Multi-server (Aug 6 2026) — one portal, N gateway servers
+
+The portal can talk to **any number of OpenClaw gateway servers at once** and
+merge them into one agent list. This is how it works:
+
+- **Config** (`portal-config.json`): a `gateways` array —
+  `[{ id, name, url, token, enabled }]`. Legacy single `gatewayUrl`/
+  `gatewayToken` still works and is auto-synthesized into one entry, so
+  single-server deployments don't need to change anything.
+- **Merged agent list:** `/api/agents` fans out `agents.list` to every
+  connected gateway and tags each agent with its server (`server`, `serverName`,
+  `ref: "gw:agent"`, `key: "agent:gw:agent:main"`). One server down = its
+  agents just don't appear; the `servers[]` array reports status and the rest
+  keep working.
+- **Namespaced sessions:** portal session keys are `agent:<gwId>:<agentId>:main`
+  so two servers that both have an agent named the same never collide.
+- **Access control:** student assignments accept bare ids (`willow` = any
+  server), pinned refs (`lab:labbot`), and server wildcards (`lab:*` = all
+  agents on that server). Enforced on every endpoint.
+- **Rooms (panel mode):** room agents are refs, so one room can mix agents
+  from different servers — each round routes each participant's turn to its
+  own server and waits for the reply. Loop-safe as before.
+- **Approvals:** approval ids are namespaced `gw:rawId`; resolve routes to the
+  owning server.
+- **Per-server ops:** each gateway must approve the portal device once
+  (`openclaw devices approve`, or bootstrap `--approve`). Tokens live in the
+  chmod-600 config, browser never sees them.
+- **Dev sandbox:** `portal-multi/` in the workspace has a mock gateway
+  (`mock-gateway.js`, speaks the operator protocol) + e2e scripts used to
+  prove the whole thing before touching the live portal.
+
+Known limitation: if an agent's session is already busy (queued sends), the
+room engine can miss that reply (the ack comes first, content streams under a
+later run) and records `[no reply]`. The agent still got the prompt; the next
+round includes the conversation. History-fallback polling is a future
+refinement.
+
+### Live gateway management (Aug 2026 — Gateways view, admin)
+
+Admins can add/remove/edit gateway servers **from the UI** — no config file
+editing, no portal restart:
+
+- **Gateways view** (admin nav): lists every configured gateway with live
+  status (connected/offline/disabled + agent count), add form, and per-row
+  ✏️ edit / ⏸ enable-toggle / 🗑 delete.
+- **API:** `GET/POST /api/gateways` (list/add), `PATCH/DELETE
+  /api/gateways/:id` (edit/remove). Admin-only (403 for instructors/
+  students). Every change is audited (`gateway_add/update/remove`).
+- **Tokens are write-only**: the API returns `hasToken: true/false`, never the
+  token itself. The edit modal leaves the field blank to keep the existing
+  token.
+- **Live effect:** adding a gateway starts connecting immediately; URL/token
+  edits tear down and reconnect the client right away; disabling stops the
+  client (agents disappear from the list); enabling restarts it. The agent
+  list and dashboard refresh automatically.
+- **Persistence:** changes are written back to `portal-config.json` (a `.bak`
+  is kept before each write). The container mount is read-write now, so the
+  running portal can save admin edits.
+
+### Live updates fix (Aug 2026) — no more manual refresh
+
+Previously the chat pane required a manual page refresh to see new messages.
+Root cause: gateway chat events carry the **raw** session key
+(`agent:<agentId>:main`), but the browser subscribes with the **namespaced**
+key (`agent:<gwId>:<agentId>:main`) and drops any event whose `sessionKey`
+doesn't match. Tool receipts were namespaced and worked; chat events were
+not — so replies only appeared after a reload. The SSE fanout now rewrites
+`sessionKey` to the namespaced key before sending, so deltas/finals stream
+live exactly like tool receipts do. Verified end-to-end: an SSE subscriber
+receives `state=delta/final` with a matching `sessionKey` after `/api/send`.
+
+## Open it
+
+- **On this server:** http://127.0.0.1:18800
+- **From anywhere on the LAN:** http://<server-ip>:18800
+## CI30 context injection (Phase I, Aug 4 2026)
+
+When a **student** sends a message, the portal prepends a context block so the
+agent knows who it's helping and what the course/assignment is:
+
+```
+[Portal context · CI30 — Intro to Interactive Systems]
+Student: Student (Demo) (@student)
+Term: Summer 2026
+Assignment: a1 — Help Desk Bot (due 2026-08-15)
+...
+```
+
+- Context lives in `portal-context.json` (bind-mounted, chmod 600): course
+  metadata (code/name/term/syllabus/assignments) + per-user context
+  (enabled, profile, assignment, notes).
+- **Injection is server-side** on `/api/send` (students only — instructors/admins
+  send as-is). The response reports `injected: true` + the block; the send is
+  audited with the injected flag.
+- **Students see what's injected**: a 🧠 strip above the composer shows the exact
+  block sent with their messages (click to expand).
+- **Instructors/admins edit it**: "course context" button in Users/Students
+  views edits the course + assignments; the per-row "context" button edits a
+  student's profile/assignment/notes + injection toggle.
+- API: `GET /api/context` (own block for students, all users for staff),
+  `POST /api/context/course` (instructor+), `POST /api/users/<u>/context`
+  (instructor+; instructors may only edit students).
+- POC note: this is lean, portal-side context — no gateway/context-engine
+  changes.
+
+## Per-assignment policy (Phase I, Aug 6 2026)
+
+What an agent may **do** while helping a student on a given assignment:
+
+- Each assignment can carry a `policy` in `portal-context.json`:
+  `allowedTools`, `blockedTools`, and free-text `rules`.
+- **Injection:** the policy is baked into the student's context block, so the
+  agent knows the guardrails before answering ("Assignment policy: …" +
+  "Policy rules: …" lines).
+- **Enforcement (lean):** when a tool fires in a student's session, the portal
+  checks it against the student's active-assignment policy. Blocked or
+  non-allowed tools get flagged on the live receipt card (`⛔ blocked by a1
+  policy`) and written to the audit log as `tool_policy_block`. This is
+  flag-and-audit, not hard-block — the gateway still runs the tool; the portal
+  surfaces the violation to staff. (Hard enforcement would need gateway-side
+  work — later roadmap.)
+- **Editing:** the "course context" modal (instructors/admins) gained a
+  Policies textarea: one line per assignment,
+  `id | blocked:a,b allowed:c,d rules text…` (tools are comma lists, rules are
+  any trailing text).
+- Seeded demo: assignment `a1` allows `web_search, web_fetch, read, write` and
+  blocks `exec, browser` with a "no shell commands for students" rule.
+
+## Tool receipts + confirmations (Phase I, Aug 5 2026)
+
+Two things, both live off the gateway's operator event stream:
+
+**Tool receipts** — when an agent runs a tool during a chat, the chat shows a
+live receipt card: `🔧 exec` with a running indicator, live command output as it
+streams, then `✓`/`✗` + duration when it finishes. Driven by `agent` events
+(`stream: item` + `stream: command_output`), fanned out per-session over the
+same SSE stream as chat — keyed strictly off `sessionKey`, so nothing leaks
+across sessions. History rows render as `⚙ <tool>` lines (already existed).
+
+**Tool confirmations (approvals)** — when an agent's tool/exec needs approval,
+the gateway broadcasts `exec.approval.requested` / `plugin.approval.requested`.
+The portal shows a 🛡 card in the chat with the exact command and, for
+**instructor/admin**, ✓ Approve / ✗ Deny buttons (resolved via
+`exec.approval.resolve` / `plugin.approval.resolve`, audited). **Students see a
+read-only "⏳ waiting for staff approval" card** — resolve is staff-only,
+enforced server-side (403 for students) + `canResolve` is computed server-side.
+
+- API: `GET /api/approvals` (staff: all; students: only their sessions, read-only),
+  `POST /api/approvals/<id>/resolve` (instructor+, `{decision: approve|deny}`).
+- Resolved state persists ~30 min in memory for staff review; audit log records
+  every resolve attempt (including failures).
+- ⚠️ **Requires the `operator.approvals` scope on the portal device.** The
+  gateway currently approves the device for read/write only, so the portal
+  auto-falls-back to read/write (approvals stay read-only, staff see a banner)
+  until the pending scope upgrade is approved on the gateway. Tool receipts
+  need no scope change — they work today.
+
+## Accounts & roles (Phase I, Aug 3 2026)
+
+Local accounts with three roles. **Students only see the agents assigned to
+them** — enforced server-side on every endpoint (agents/history/send/abort/stream).
+
+| Role | Sees | Can do |
+|---|---|---|
+| `admin` | all agents | everything + manage accounts, view audit log |
+| `instructor` | all agents | chat + student roster view |
+| `student` | assigned agents only | chat with those agents |
+
+Accounts live in `portal-users.json` (scrypt-hashed, chmod 600, bind-mounted).
+
+**Generic-login convention (Aug 18 2026):** every deployment ships with the
+SAME default admin credential so you can get in on day one — then you change
+it. The login screen shows the hint and a red banner nags until you do.
+
+```
+admin      / admin                 (role: admin — GENERIC DEFAULT, change it!)
+```
+
+Change it after first login via **Users → reset pw**, or by re-running
+`PORTAL_PASSWORD=... ./bootstrap.sh --force-config`. Demo accounts are seeded
+on fresh installs (delete them before real use):
+
+```
+instructor / instructor-demo     (role: instructor)
+student    / student-demo        (role: student — assigned willow, ethan)
+```
+
+If no admin exists, the server bootstraps `admin` with the generic password.
+Every login/send/abort/account change is appended to `portal-audit.log`
+(admins can browse it in the UI).
+
+## How it works
+
+```
+Browser ──HTTP/SSE──▶ portal-server.js ──WebSocket (loopback)──▶ OpenClaw Gateway (:18790)
+                            │
+                            └─ device-signed operator connection (operator.read/write)
+```
+
+- The server holds the gateway token — **the browser never sees it**.
+- It connects to the gateway over loopback with a persistent Ed25519 device
+  identity (`portal-device.json`), so the gateway treats it as a trusted
+  operator client.
+- `chat.send` / `chat.history` / `chat.abort` do the talking; SSE streams
+  `chat` events (delta/final) to the page.
+
+## Files
+
+| File | Purpose |
+|---|---|
+| `portal-server.js` | Node 22+ server, zero dependencies (built-in `WebSocket` + `http`) |
+| `portal.html` | The whole UI — single file, vanilla JS, dark theme |
+| `portal-config.json` | Port, bind, gateway URL, gateway token, portal password |
+| `portal-device.json` | Persistent device identity (auto-generated, chmod 600) |
+| `portal-users.json` | Local accounts + roles (auto-seeded, chmod 600) |
+| `portal-audit.log` | Append-only audit trail (logins, sends, account changes) |
+| `portal-context.json` | CI30 course + per-user context store (chmod 600) |
+| `portal.log` | Runtime log |
+
+## Config (`portal-config.json`)
+
+```json
+{
+  "port": 18800,
+  "bind": "0.0.0.0",
+  "gateways": [
+    { "id": "home", "name": "Home", "url": "ws://127.0.0.1:18790", "token": "<gateway auth token>", "enabled": true }
+  ],
+  "portalPassword": "<browser login password>",
+  "sessionTtlHours": 12
+}
+```
+
+Gateways can also be managed live from the UI (admin → Gateways) — see above.
+The file is written back on every change (with a `.bak` kept).
+
+## Docker deployment (current)
+
+The portal runs as a Docker container (`agent-portal`, host networking,
+`restart: unless-stopped` — survives reboots).
+
+```bash
+cd portal
+docker compose up -d --build     # build + start
+docker compose logs -f           # live logs (stdout)
+docker compose down              # stop
+```
+
+- **Host networking** — the container must reach the OpenClaw gateway on the
+  host loopback (`ws://127.0.0.1:18790`).
+- **Config + device identity are bind-mounted** — `portal-device.json` MUST
+  persist so the gateway keeps recognizing the device.
+- **Port/bind come from `portal-config.json`** (the image sets no PORT/BIND
+  env — env overrides beat the config file in `loadConfig()`, so hardcoding
+  them broke per-server ports; fixed during replication testing).
+- Env overrides: `GATEWAY_URL`, `GATEWAY_TOKEN`, `PORTAL_PASSWORD`,
+  `SESSION_TTL_HOURS`, `RECONNECT_BASE_MS`, `RECONNECT_MAX_MS` (via
+  `docker run -e`; the compose file deliberately sets none).
+- Runs with `cap_drop: ALL` + `no-new-privileges`.
+- The old systemd unit (`agent-portal.service`) is kept but **disabled** as a fallback.
+
+## Service management (old systemd path, fallback)
+
+```bash
+systemctl status agent-portal     # check it's running
+systemctl restart agent-portal    # restart
+journalctl -u agent-portal -f     # live logs
+systemctl stop agent-portal       # stop
+```
+
+Starts automatically on boot. It will reconnect to the gateway on its own if
+the gateway restarts (exponential backoff, 1s → 30s).
+
+## API (for scripts)
+
+All `/api/*` need the `portal_session` cookie from `/api/login`.
+
+```
+POST /api/login  {username,password}  → sets cookie
+GET  /api/me                         → { authed, user:{username,role,agents} }
+GET  /api/agents                     → { agents: [{id,name,emoji}], connected, restricted }
+GET  /api/history?session=agent:X:main → { messages: [{role,text,time,toolName}] }
+POST /api/send    {session,message}   → { runId, injected, context }
+POST /api/abort   {session,runId}     → stop a run
+GET  /api/stream?session=agent:X:main → SSE: chat events (state: delta|final)
+
+# CI30 context injection
+GET  /api/context                     → { course, own:{context,block}, users } (staff see all users)
+POST /api/context/course              → edit course context {code,name,term,syllabus,assignments:[{id,title,due,brief}]} (instructor+)
+POST /api/users/:u/context            → edit a user's context {enabled,profile,assignment,notes} (instructor+; students for instructors)
+
+# instructor+ (students-only list for instructors)
+GET  /api/users                      → { users: [{username,displayName,role,agents}] }
+
+# admin only
+POST /api/users                      → create account {username,displayName,role,agents,password}
+POST /api/users/:u/agents           → set assigned agents {agents:[...]} (* = all)
+POST /api/users/:u/password         → reset password {password}
+DELETE /api/users/:u                → delete account
+GET  /api/audit?limit=100           → { entries: [{ts,user,role,action,detail}] }
+
+# group chat rooms (instructor+)
+GET  /api/rooms                      → list rooms (summaries incl. mode/paused)
+POST /api/rooms                      → create {name, agents:[...], mode:'rounds'|'free'}
+GET  /api/rooms/:id                  → full room incl. transcript
+POST /api/rooms/:id                  → {action:'message',text} | {action:'round',rounds?:1-10} | {action:'stop'} | {action:'pause'} | {action:'resume'} | {action:'agents',agents:[...]}
+DELETE /api/rooms/:id                → delete (creator or admin)
+GET  /api/rooms/:id/stream           → SSE: {event:'transcript'|'status'}
+```
+
+## Group chat (panel mode, Aug 3 2026 · modes + free-flow Aug 4 2026)
+
+Rooms put 2+ agents in a shared conversation. Two modes, chosen at creation:
+
+**Rounds mode** (default, loop-safe by construction): a **round** sends the
+full room transcript to each agent in turn, waits for its reply, appends it,
+then moves to the next agent. Rounds are human-triggered (drop a message or
+press "next round") and every agent speaks exactly once per round. The
+`rounds` field (1-10) batches multiple consecutive rounds into one trigger.
+
+**Free-flow mode**: agents reply to each other on their own. Every non-meta
+message (user or agent) triggers one reply from each *other* agent that
+hasn't already replied to that message, so the conversation cascades without
+human input. Loop-safe by design:
+- per-message dedupe — an agent never replies twice to the same message;
+- no self-replies — the sender is never triggered by its own message;
+- burst budget (BURST_MAX = 20) — auto-replies cap per human message, then
+the room goes quiet until a human speaks (each human message resets the
+budget);
+- **Pause/Resume** — pause halts the cascade between turns (in-flight turn
+finishes), resume re-triggers it for the latest message; Stop = halt + pause.
+
+Rooms persist across restarts in `portal-rooms.json` (bind-mounted). Agent
+replies are watched server-side via chat events (`state: final` + `runId`),
+so a round advances without polling. Per-agent busy guard: an agent busy in
+another room is skipped with a note. In free mode agents get a free-flow
+variant of the turn prompt ("reply as the conversation moves, nobody waits
+for a formal turn").
+
+**History-fallback (Aug 18 2026):** when an agent's session is busy/queued,
+`chat.send` acks with a runId but the real run lands under a *different*
+runId — the event watcher settles empty and the room used to record
+`[no reply]` even though the agent answered. Now an empty settle triggers
+`historyFallbackReply()`: it polls `chat.history` for the agent's main
+session and recovers the newest assistant message that arrived after the
+turn prompt was sent (10s clock-skew grace vs the gateway host). Rounds mode
+polls up to 90s before declaring timeout/silence; free-flow polls up to 45s
+so a genuinely-quiet agent still settles (nothing new in history = stayed
+quiet, loop moves on). Recovery is invisible to users — the real reply just
+appears in the transcript.
+
+## Notes
+
+- `deliver:false` is used on send, so agent replies go back to the portal
+  session and are **not** pushed to Telegram or other channels.
+- Each browser tab gets its own live stream; multiple people can watch one
+  agent's session at once.
+- Portal sessions expire after 12 hours by default — just log in again.
+- No login rate-limiting yet (POC) — TODO before real deployment.
+
+## Phase I roadmap (Dad's list, kickoff Aug 3 2026)
+
+1. ✅ **Roles + permission-aware UI** (student/instructor/admin, local accounts)
+2. ✅ **CI30 context injection**
+3. ✅ **Tool receipts + confirmations**
+4. ✅ **Per-assignment policy** (allowed/blocked tools + rules; flag + audit on receipts)
+5. ✅ **Instructor dashboard v1** (Aug 7 — `/api/dashboard` + Dashboard view; stat tiles, assignment breakdown, roster w/ context + last-seen, recent activity, ⛔ policy violations, quick links)
+6. ✅ **Audit log** (groundwork Aug 3 + UI polish Aug 18 — icon badges, friendly detail chips, user/action filters, limit selector, live refresh, summary chips; `login_failed` tracked too)
+7. ✅ **Panel mode** (rooms of 2+ agents, full-context)
+8. ✅ **Mobile pass** (Aug 7 — responsive at ≤900px/≤520px: top-panel layout, horizontal agent strip, stacked dash columns; verified 0px horizontal scroll at 390/1280)
+
+Built by Noah, Aug 1 2026 (v1) · Aug 3 2026 (Phase I roles) · Aug 7 2026 (dashboard v1 + mobile pass — Phase I complete). Dad's ask: "a web chat portal that connects to agent:main for each agent, loads in a browser."

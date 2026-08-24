@@ -1,0 +1,11 @@
+# Keep secrets and host artifacts out of the image
+portal-config.json
+portal-device.json
+portal-users.json
+portal-audit.log
+portal.log
+reconnect-test.js
+docker-compose.yml
+Dockerfile
+README.md
+.git

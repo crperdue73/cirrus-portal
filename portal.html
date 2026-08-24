@@ -1,0 +1,2192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Portal</title>
+<style>
+  :root {
+    /* Wraith palette (from Dad, Aug 3 2026) */
+    --bg: #0a0a0a;
+    --panel: #141414;
+    --panel2: #1e1e1e;
+    --line: #2a2a2a;
+    --text: #e8e8e8;
+    --muted: #8f8f8f;
+    --slate: #73a3c8;
+    --amber: #00d4e8;
+    --amber2: #4ee3f5;
+    --user: #5c44d4;
+    --user2: #7a63e8;
+    --ok: #34d399;
+    --err: #f87171;
+    --radius: 12px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    overflow: hidden;
+  }
+
+  /* ── Login ── */
+  #login {
+    position: fixed; inset: 0; z-index: 50;
+    display: flex; align-items: center; justify-content: center;
+    background: radial-gradient(1200px 600px at 50% -10%, #241d45 0%, var(--bg) 60%);
+  }
+  #login.hidden, .hidden { display: none !important; }
+  .login-card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 16px;
+    padding: 40px 36px; width: 340px; text-align: center;
+    box-shadow: 0 20px 60px rgba(0,0,0,.5);
+  }
+  .login-card .logo { font-size: 44px; }
+  .login-card h1 { font-size: 22px; margin: 12px 0 4px; }
+  .login-card p { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
+  .login-card input {
+    width: 100%; padding: 12px 14px; border-radius: 10px;
+    border: 1px solid var(--line); background: var(--panel2); color: var(--text);
+    font-size: 15px; outline: none; margin-bottom: 10px;
+  }
+  .login-card input:focus { border-color: var(--amber); }
+  .login-card button {
+    width: 100%; margin-top: 4px; padding: 12px; border: none; border-radius: 10px;
+    background: linear-gradient(135deg, var(--amber), var(--amber2)); color: #05272e;
+    font-weight: 700; font-size: 15px; cursor: pointer;
+  }
+  .login-card button:hover { filter: brightness(1.08); }
+  .login-err { color: var(--err); font-size: 13px; margin-top: 10px; min-height: 18px; }
+
+  /* ── Layout ── */
+  #app { display: grid; grid-template-columns: 264px minmax(0,1fr); height: 100vh; }
+  aside {
+    background: var(--panel); border-right: 1px solid var(--line);
+    display: flex; flex-direction: column; min-height: 0; min-width: 0;
+  }
+  .side-head { padding: 18px 16px 10px; border-bottom: 1px solid var(--line); }
+  .side-head .brand { font-size: 17px; font-weight: 800; letter-spacing: .2px; }
+  .side-head .brand span { color: var(--amber); }
+  .side-head .sub { color: var(--muted); font-size: 11.5px; margin-top: 2px; }
+
+  /* role-aware nav */
+  .nav { display: flex; gap: 2px; padding: 8px 8px 4px; }
+  .nav button {
+    flex: 1; padding: 7px 4px; border: 1px solid transparent; border-radius: 8px;
+    background: transparent; color: var(--muted); font-size: 12px; font-weight: 600;
+    cursor: pointer; white-space: nowrap;
+  }
+  .nav button:hover { color: var(--text); background: var(--panel2); }
+  .nav button.active { color: var(--amber); background: var(--panel2); border-color: rgba(0,212,232,.35); }
+
+  #agentList { flex: 1; overflow-y: auto; padding: 8px; }
+  .srvline { padding: 8px 10px 4px; font-size: 12px; display: flex; flex-wrap: wrap; gap: 8px; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
+  .srv { padding: 2px 8px; border-radius: 20px; border: 1px solid var(--line); color: var(--muted); }
+  .srv.on { color: var(--ok); border-color: rgba(52,211,153,.4); }
+  .srv.off { color: var(--err); border-color: rgba(248,113,113,.4); }
+  .srvtag { font-size: 10px; font-weight: 600; color: var(--slate); background: rgba(115,163,200,.12); border: 1px solid rgba(115,163,200,.3); padding: 1px 6px; border-radius: 10px; vertical-align: 1px; }
+  .agent {
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 10px; border-radius: 10px; cursor: pointer;
+    border: 1px solid transparent; margin-bottom: 2px;
+    transition: background .12s, border-color .12s;
+  }
+  .agent:hover { background: var(--panel2); }
+  .agent.active { background: var(--panel2); border-color: rgba(0,212,232,.5); }
+  .agent .avatar {
+    width: 34px; height: 34px; border-radius: 50%; flex: none;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 17px; background: #1c1c1c; border: 1px solid var(--line);
+  }
+  .agent .meta { min-width: 0; }
+  .agent .name { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .agent .key { font-size: 10.5px; color: var(--muted); font-family: ui-monospace, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .side-foot { padding: 10px 14px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .side-foot .who { display: flex; align-items: center; gap: 6px; min-width: 0; }
+  /* agent list filters (gateway + text, Aug 2026) */
+  .agent-filters { display: flex; gap: 6px; padding: 6px 10px 2px; }
+  .agent-filters select, .agent-filters input {
+    background: var(--panel2); border: 1px solid var(--line); color: var(--text);
+    border-radius: 8px; padding: 5px 8px; font-size: 12px; min-width: 0;
+  }
+  .agent-filters select { flex: 0 0 auto; max-width: 46%; }
+  .agent-filters input { flex: 1; }
+  .agent-filters select:focus, .agent-filters input:focus { outline: none; border-color: rgba(0,212,232,.5); }
+  #gwDot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); display: inline-block; flex: none; }
+  #gwDot.on { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+  .role-chip {
+    font-size: 9.5px; font-weight: 800; letter-spacing: .6px; text-transform: uppercase;
+    padding: 2px 7px; border-radius: 999px; flex: none;
+  }
+  .role-chip.admin { background: rgba(0,212,232,.15); color: var(--amber); border: 1px solid rgba(0,212,232,.4); }
+  .role-chip.instructor { background: rgba(115,163,200,.15); color: var(--slate); border: 1px solid rgba(115,163,200,.4); }
+  .role-chip.student { background: rgba(52,211,153,.12); color: var(--ok); border: 1px solid rgba(52,211,153,.35); }
+  #logoutBtn { background:none; border:none; color:var(--muted); cursor:pointer; font-size:11px; text-decoration:underline; flex: none; }
+  #logoutBtn:hover { color: var(--text); }
+
+  /* ── Chat ── */
+  main { display: flex; flex-direction: column; min-height: 0; min-width: 0; position: relative; }
+  .chat-head {
+    padding: 14px 20px; border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; gap: 12px; background: var(--panel);
+  }
+  .chat-head .avatar { width: 38px; height: 38px; border-radius: 50%; background: #221b3d; border: 1px solid var(--line); display: flex; align-items: center; justify-content: center; font-size: 19px; }
+  .chat-head .who { min-width: 0; }
+  .chat-head .who .name { font-size: 15.5px; font-weight: 700; }
+  .chat-head .who .key { font-size: 11px; color: var(--muted); font-family: ui-monospace, monospace; }
+  .chat-head .actions { margin-left: auto; display: flex; gap: 8px; }
+  .chat-head button {
+    border: 1px solid var(--line); background: var(--panel2); color: var(--muted);
+    padding: 6px 12px; border-radius: 8px; font-size: 12px; cursor: pointer;
+  }
+  .chat-head button:hover { color: var(--text); border-color: rgba(0,212,232,.4); }
+
+  #messages { flex: 1; overflow-y: auto; padding: 20px 22px; scroll-behavior: smooth; }
+  .msg { display: flex; margin-bottom: 14px; }
+  .msg.user { justify-content: flex-end; }
+  .bubble {
+    max-width: min(720px, 78%);
+    padding: 10px 14px; border-radius: var(--radius);
+    font-size: 14.5px; line-height: 1.55;
+    white-space: pre-wrap; word-wrap: break-word;
+  }
+  .msg.user .bubble { background: linear-gradient(135deg, var(--user), var(--user2)); color: #fff; border-bottom-right-radius: 4px; }
+  .msg.assistant .bubble { background: var(--panel2); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
+  .msg.tool { justify-content: center; }
+  .msg.tool .bubble {
+    background: transparent; color: var(--muted); font-size: 11.5px;
+    font-family: ui-monospace, monospace; padding: 2px 10px; border: none;
+    max-width: 90%;
+  }
+
+  /* Tool receipts (live tool activity) */
+  .receipt {
+    max-width: 90%; background: var(--panel2); border: 1px solid var(--line);
+    border-radius: 10px; padding: 8px 12px; font-family: ui-monospace, monospace;
+    font-size: 11.5px; color: var(--muted); min-width: 240px; text-align: left;
+  }
+  .receipt-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .receipt-name { color: var(--text); font-weight: 600; }
+  .receipt-status.running { color: var(--amber); animation: blink 1s steps(1) infinite; }
+  .receipt-status.done { color: var(--ok); }
+  .receipt-status.failed { color: var(--err); }
+  .receipt-blocked {
+    color: var(--err); border: 1px solid var(--err); border-radius: 4px;
+    padding: 0 6px; font-size: 11px; font-weight: 600;
+  }
+  .receipt.policy-blocked { border-color: var(--err); }
+  .receipt-detail { color: var(--muted); }
+  .receipt-out { margin-top: 4px; }
+  .receipt-out summary { cursor: pointer; color: var(--slate); user-select: none; }
+  .receipt-out pre {
+    margin: 4px 0 0; padding: 6px 8px; background: #0a0a0a; border-radius: 6px;
+    border: 1px solid var(--line); max-height: 140px; overflow: auto;
+    white-space: pre-wrap; word-break: break-all; font-size: 11px; color: #c9d1d9;
+  }
+
+  /* Tool confirmations (approval cards) */
+  .approval {
+    max-width: min(560px, 92%); background: var(--panel2); border: 1px solid #d4a72c66;
+    border-radius: 12px; padding: 12px 14px; font-size: 13px; color: var(--text);
+    text-align: left;
+  }
+  .approval-head { font-weight: 700; margin-bottom: 8px; color: var(--amber); }
+  .approval-cmd {
+    display: block; background: #0a0a0a; border: 1px solid var(--line); border-radius: 8px;
+    padding: 8px 10px; font-family: ui-monospace, monospace; font-size: 12px;
+    color: #e8e8e8; white-space: pre-wrap; word-break: break-all; margin-bottom: 8px;
+  }
+  .approval-warn { color: var(--err); font-size: 12px; margin-bottom: 8px; }
+  .approval-agent { color: var(--muted); font-size: 11px; margin-bottom: 8px; }
+  .approval-body { display: flex; gap: 8px; align-items: center; }
+  .approval .appr-yes, .approval .appr-no {
+    padding: 6px 16px; border-radius: 8px; border: none; font-weight: 700; cursor: pointer; font-size: 12.5px;
+  }
+  .approval .appr-yes { background: var(--ok); color: #03241a; }
+  .approval .appr-no { background: transparent; border: 1px solid var(--err); color: var(--err); }
+  .approval.approved { border-color: #34d39966; }
+  .approval.approved .approval-head { color: var(--ok); }
+  .approval.denied { border-color: #f8717166; }
+  .approval.denied .approval-head { color: var(--err); }
+  .approval-wait { color: var(--muted); font-size: 12px; }
+  .approval-ok { color: var(--ok); font-weight: 600; }
+  .approval-no { color: var(--err); font-weight: 600; }
+  #approvalBanner {
+    max-width: 900px; margin: 0 auto 10px; padding: 8px 12px; font-size: 12px;
+    background: #d4a72c1a; border: 1px solid #d4a72c55; border-radius: 10px; color: #e8c96a;
+  }
+  #approvalBanner.hidden { display: none; }
+  #defaultCredsBanner {
+    max-width: 900px; margin: 0 auto 10px; padding: 10px 14px; font-size: 13px;
+    background: #f8717118; border: 1px solid #f8717155; border-radius: 10px; color: #fca5a5;
+    line-height: 1.45;
+  }
+  .login-hint {
+    margin-top: 14px; font-size: 11.5px; color: var(--muted); line-height: 1.5;
+    background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px;
+  }
+  .login-hint code { color: var(--amber2); background: #00000055; padding: 1px 5px; border-radius: 4px; font-size: 11px; }
+  .msg .time { font-size: 10px; color: var(--muted); align-self: flex-end; margin: 0 6px; opacity: .8; }
+  .msg.assistant .typing { color: var(--muted); }
+  .typing-dots::after { content: "…"; animation: blink 1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .empty {
+    height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    color: var(--muted); gap: 10px; text-align: center; padding: 20px;
+  }
+  .empty .big { font-size: 42px; }
+  .empty .hint { font-size: 13px; max-width: 420px; line-height: 1.6; }
+
+  #composer {
+    padding: 12px 20px 16px; border-top: 1px solid var(--line); background: var(--panel);
+  }
+  .composer-row { display: flex; gap: 10px; align-items: flex-end; max-width: 900px; margin: 0 auto; }
+  #input {
+    flex: 1; resize: none; min-height: 46px; max-height: 160px;
+    padding: 12px 14px; border-radius: 12px;
+    border: 1px solid var(--line); background: var(--panel2); color: var(--text);
+    font-size: 14.5px; line-height: 1.5; outline: none; font-family: inherit;
+  }
+  #input:focus { border-color: var(--amber); }
+  #sendBtn {
+    padding: 12px 22px; border: none; border-radius: 12px;
+    background: linear-gradient(135deg, var(--amber), var(--amber2)); color: #05272e;
+    font-weight: 700; font-size: 14.5px; cursor: pointer; height: 46px;
+  }
+  #sendBtn:hover { filter: brightness(1.08); }
+  #sendBtn:disabled { opacity: .5; cursor: not-allowed; }
+  #stopBtn {
+    padding: 12px 18px; border: 1px solid var(--err); border-radius: 12px;
+    background: transparent; color: var(--err); font-weight: 700; font-size: 13.5px;
+    cursor: pointer; height: 46px; display: none;
+  }
+  #stopBtn.visible { display: block; }
+  .composer-hint { max-width: 900px; margin: 8px auto 0; color: var(--muted); font-size: 11px; }
+
+  /* ── Management views (Users / Audit / Students) ── */
+  #mgmtView { flex: 1; overflow-y: auto; padding: 24px 28px; }
+
+  /* ── Gateways view ── */
+  .gw-list { display: flex; flex-direction: column; gap: 8px; }
+  .gw-row {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px;
+    background: var(--panel);
+  }
+  .gw-row .gw-main { flex: 1; min-width: 0; }
+  .gw-row .gw-title { font-weight: 600; }
+  .gw-row .gw-title code { font-size: .78em; color: var(--muted); margin-left: 6px; }
+  .gw-row .gw-status { display: flex; align-items: center; gap: 6px; font-size: .85em; white-space: nowrap; }
+  .gw-row .gw-actions { display: flex; gap: 6px; }
+  .gw-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .gw-dot.ok { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+  .gw-dot.err { background: var(--err); }
+  .gw-dot.off { background: var(--muted); }
+  .ok-text { color: var(--ok); }
+  .err-text { color: var(--err); }
+  .form-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+  .form-row label { display: flex; flex-direction: column; gap: 4px; font-size: .8em; color: var(--muted); }
+  .form-row label.chk { flex-direction: row; align-items: center; gap: 6px; padding-bottom: 8px; }
+  .form-row input { background: var(--panel2); border: 1px solid var(--line); color: var(--text); border-radius: 8px; padding: 7px 9px; }
+  .modal label { display: block; font-size: .8em; color: var(--muted); margin: 10px 0 4px; }
+  .modal input[type="text"], .modal input:not([type]), .modal input[type="password"] {
+    width: 100%; background: var(--panel2); border: 1px solid var(--line); color: var(--text);
+    border-radius: 8px; padding: 8px 10px;
+  }
+  .modal label.chk { display: flex; align-items: center; gap: 6px; margin-top: 12px; }
+  .mgmt-head { margin-bottom: 18px; }
+  .mgmt-head h2 { font-size: 19px; font-weight: 800; }
+  .mgmt-head p { color: var(--muted); font-size: 12.5px; margin-top: 3px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 18px; margin-bottom: 20px;
+  }
+  .card h3 { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); margin-bottom: 14px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th { text-align: left; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .6px; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+  td { padding: 9px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  tr:last-child td { border-bottom: none; }
+  .tag {
+    display: inline-block; font-size: 10.5px; font-weight: 600; font-family: ui-monospace, monospace;
+    background: var(--panel2); border: 1px solid var(--line); color: var(--muted);
+    padding: 1px 7px; border-radius: 999px; margin-right: 4px;
+  }
+  .tag.all { color: var(--amber); border-color: rgba(0,212,232,.4); }
+  .rowbtn {
+    border: 1px solid var(--line); background: var(--panel2); color: var(--muted);
+    padding: 4px 10px; border-radius: 7px; font-size: 11.5px; cursor: pointer; margin-right: 4px;
+  }
+  .rowbtn:hover { color: var(--text); border-color: rgba(0,212,232,.4); }
+  .rowbtn.danger:hover { color: var(--err); border-color: rgba(248,113,113,.5); }
+  .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; align-items: end; }
+  .form-grid label { display: block; font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 4px; }
+  .form-grid input, .form-grid select {
+    width: 100%; padding: 9px 11px; border-radius: 8px;
+    border: 1px solid var(--line); background: var(--panel2); color: var(--text);
+    font-size: 13.5px; outline: none;
+  }
+  .form-grid input:focus, .form-grid select:focus { border-color: var(--amber); }
+  .form-actions { display: flex; gap: 8px; margin-top: 12px; }
+  .btn-primary {
+    padding: 9px 18px; border: none; border-radius: 9px;
+    background: linear-gradient(135deg, var(--amber), var(--amber2)); color: #05272e;
+    font-weight: 700; font-size: 13px; cursor: pointer;
+  }
+  .btn-primary:hover { filter: brightness(1.08); }
+  .audit-row {
+    font-family: ui-monospace, monospace; font-size: 12px;
+    padding: 8px 10px; border-bottom: 1px solid var(--line);
+    display: flex; gap: 10px; align-items: baseline;
+  }
+  .audit-row:last-child { border-bottom: none; }
+  .audit-time { color: var(--muted); flex: none; font-size: 11px; }
+  .audit-user { color: var(--amber); font-weight: 700; flex: none; }
+  .audit-ico { flex: none; font-size: 13px; }
+  .audit-label { flex: none; font-weight: 600; }
+  .audit-label.tone-ok { color: var(--ok); }
+  .audit-label.tone-err { color: var(--err); }
+  .audit-label.tone-warn { color: #fbbf24; }
+  .audit-label.tone-info { color: var(--slate); }
+  .audit-label.tone-muted { color: var(--muted); }
+  .audit-detail { color: var(--muted); word-break: break-all; display: flex; flex-wrap: wrap; gap: 4px; }
+  .audit-kv { background: var(--panel2); border: 1px solid var(--line); border-radius: 5px; padding: 1px 6px; font-size: 11px; }
+  .audit-kv em { font-style: normal; color: var(--amber2); margin-right: 3px; }
+  .audit-bar {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    flex-wrap: wrap; margin-bottom: 10px;
+  }
+  .audit-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .audit-chip {
+    font-size: 12px; color: var(--muted); background: var(--panel2);
+    border: 1px solid var(--line); border-radius: 20px; padding: 3px 10px;
+  }
+  .audit-chip b { color: var(--text); }
+  .audit-chip.warn { border-color: #f8717166; color: var(--err); }
+  .audit-chip.warn b { color: var(--err); }
+  .audit-controls { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .audit-input {
+    background: var(--panel2); border: 1px solid var(--line); color: var(--text);
+    border-radius: 7px; padding: 5px 8px; font-size: 12px; font-family: inherit;
+  }
+  .audit-input:focus { outline: none; border-color: var(--amber); }
+  .student-line { display: flex; align-items: center; gap: 10px; padding: 10px 4px; border-bottom: 1px solid var(--line); }
+  .student-line:last-child { border-bottom: none; }
+  .student-line .avatar { width: 32px; height: 32px; border-radius: 50%; background: #1c1c1c; border: 1px solid var(--line); display: flex; align-items: center; justify-content: center; font-size: 15px; flex: none; }
+  .student-line .meta { min-width: 0; }
+  .student-line .name { font-size: 14px; font-weight: 600; }
+  .student-line .sub { font-size: 11px; color: var(--muted); }
+  .student-line .agents { margin-left: auto; text-align: right; }
+
+  /* instructor dashboard v1 (Phase I, Aug 7 2026) */
+  .dash-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 20px; }
+  .tile { background: var(--panel2); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
+  .tile.warn { border-color: rgba(248,113,113,.55); }
+  .tile-n { font-size: 26px; font-weight: 800; color: var(--amber); line-height: 1; }
+  .tile.warn .tile-n { color: var(--err); }
+  .tile-l { font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .7px; margin-top: 6px; }
+  .dash-cols { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 18px; align-items: start; }
+  .dash-col { min-width: 0; }
+  .dash-col h3 { font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .9px; color: var(--muted); margin: 0 0 8px; }
+  .dash-row { display: flex; align-items: center; gap: 10px; padding: 8px 2px; border-bottom: 1px solid var(--line); font-size: 12.5px; min-width: 0; }
+  .dash-row:last-child { border-bottom: none; }
+  .dash-row .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .asg-tag { font-size: 10.5px; font-weight: 700; color: var(--slate); background: rgba(115,163,200,.12); border: 1px solid rgba(115,163,200,.35); padding: 2px 8px; border-radius: 20px; white-space: nowrap; }
+  .asg-tag.none { color: var(--muted); background: transparent; }
+  .b-on { color: var(--ok); font-size: 10.5px; flex: none; }
+  .b-off { color: var(--err); font-size: 10.5px; flex: none; }
+  .dash-quick { margin-top: 16px; display: flex; gap: 8px; flex-wrap: wrap; }
+
+  /* ── Rooms (group chat / panel mode) ── */
+  .room-line { display: flex; align-items: center; gap: 10px; padding: 10px 4px; border-bottom: 1px solid var(--line); }
+  .room-line:last-child { border-bottom: none; }
+  .room-line .meta { min-width: 0; flex: 1; }
+  .room-line .name { font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .room-line .sub { font-size: 11px; color: var(--muted); margin-top: 3px; }
+  .room-head { display: flex; align-items: center; gap: 12px; padding: 2px 0 14px; border-bottom: 1px solid var(--line); margin-bottom: 10px; }
+  .room-title { font-size: 17px; font-weight: 800; }
+  .room-sub { font-size: 11.5px; color: var(--muted); margin-top: 3px; line-height: 1.7; }
+  #roomMessages { flex: 1; overflow-y: auto; padding: 8px 4px 16px; }
+  #roomMessages .empty { height: auto; padding: 60px 20px; }
+  #roomInput {
+    flex: 1; resize: none; min-height: 46px; max-height: 160px;
+    padding: 12px 14px; border-radius: 12px;
+    border: 1px solid var(--line); background: var(--panel2); color: var(--text);
+    font-size: 14.5px; line-height: 1.5; outline: none; font-family: inherit;
+  }
+  #roomInput:focus { border-color: var(--amber); }
+  .room-composer { padding: 12px 0 16px; border-top: 1px solid var(--line); }
+  .room-composer .composer-row { gap: 8px; }
+  .msg .sender-label { font-size: 10px; color: var(--muted); margin-bottom: 3px; font-weight: 700; }
+  .bubble.meta { background: transparent; color: var(--muted); font-size: 11.5px; font-family: ui-monospace, monospace; padding: 2px 10px; border: none; }
+
+  /* ── context strip (CI30) ── */
+  #ctxStrip {
+    border-bottom: 1px solid var(--line);
+    background: var(--panel);
+    padding: 4px 12px;
+  }
+  #ctxToggle {
+    background: none; border: none; color: var(--slate); cursor: pointer;
+    font-size: 12px; padding: 2px 0; font-family: inherit;
+  }
+  #ctxToggle:hover { color: var(--amber); }
+  .ctx-caret { display: inline-block; transition: transform .15s; }
+  #ctxToggle.open .ctx-caret { transform: rotate(90deg); }
+  #ctxBlock {
+    margin: 6px 0 8px; padding: 10px 12px; font-size: 11px; line-height: 1.5;
+    background: var(--panel2); border: 1px solid var(--line); border-radius: 8px;
+    color: var(--muted); white-space: pre-wrap; font-family: ui-monospace, monospace;
+    max-height: 160px; overflow-y: auto;
+  }
+
+  /* ── context editor modal ── */
+  .modal-overlay {
+    position: fixed; inset: 0; z-index: 60; background: rgba(0,0,0,.6);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .modal {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    padding: 20px 22px; width: 480px; max-width: 94vw; max-height: 86vh; overflow-y: auto;
+    box-shadow: 0 20px 60px rgba(0,0,0,.5);
+  }
+  .modal h3 { font-size: 16px; margin-bottom: 2px; }
+  .modal .sub { color: var(--muted); font-size: 12px; margin-bottom: 14px; }
+  .modal label { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 4px; }
+  .modal input[type=text], .modal textarea, .modal select {
+    width: 100%; padding: 8px 10px; border-radius: 8px; font-size: 13px;
+    border: 1px solid var(--line); background: var(--panel2); color: var(--text);
+    font-family: inherit; outline: none;
+  }
+  .modal textarea { resize: vertical; min-height: 52px; }
+  .modal input:focus, .modal textarea:focus, .modal select:focus { border-color: var(--amber); }
+  .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+  .modal-actions button { padding: 8px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel2); color: var(--text); cursor: pointer; font-size: 13px; }
+  .modal-actions button.btn-primary { background: linear-gradient(135deg, var(--amber), var(--amber2)); color: #05272e; font-weight: 700; border: none; }
+  .modal-actions button:hover { filter: brightness(1.1); }
+
+  #toast {
+    position: fixed; bottom: 90px; left: 50%; transform: translateX(-50%);
+    background: #3a1520; border: 1px solid var(--err); color: var(--err);
+    padding: 10px 18px; border-radius: 10px; font-size: 13px; z-index: 100;
+    display: none; max-width: 80%;
+  }
+  #toast.show { display: block; }
+  #toast.good { background: #0f2b21; border-color: var(--ok); color: var(--ok); }
+
+  ::-webkit-scrollbar { width: 10px; }
+  ::-webkit-scrollbar-thumb { background: var(--line); border-radius: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+
+  /* ── mobile pass (Phase I, Aug 7 2026) ── */
+  @media (max-width: 900px) {
+    .form-row input { width: 100% !important; }
+    .gw-row { flex-wrap: wrap; }
+    .gw-row .gw-actions { margin-left: auto; }
+    #app { grid-template-columns: minmax(0,1fr); grid-template-rows: auto minmax(0,1fr); }
+    aside { border-right: none; border-bottom: 1px solid var(--line); }
+    .side-head { padding: 10px 14px 6px; }
+    .side-head .sub { display: none; }
+    .nav { padding: 4px 8px 6px; overflow-x: auto; }
+    .nav button { flex: 0 0 auto; padding: 7px 12px; }
+    #messages { padding: 12px 12px; }
+    .composer-row { max-width: none; }
+    .dash-cols { grid-template-columns: minmax(0,1fr); }
+    .mgmt-head { padding: 0 4px; }
+  }
+  @media (max-width: 520px) {
+    .login-card { width: calc(100vw - 28px); padding: 28px 20px; }
+    #input { font-size: 16px; } /* prevents iOS auto-zoom on focus */
+    .dash-tiles { grid-template-columns: repeat(2, 1fr); }
+    .student-line { flex-wrap: wrap; }
+    .student-line .agents { margin-left: 42px; width: 100%; text-align: left; }
+    .audit-row { flex-wrap: wrap; }
+  }
+</style>
+</head>
+<body>
+
+<!-- Login -->
+<div id="login">
+  <div class="login-card">
+    <div class="logo">🐯</div>
+    <h1>Agent Portal</h1>
+    <p>Sign in with your portal account.</p>
+    <input type="text" id="loginUser" placeholder="Username" autocomplete="username">
+    <input type="password" id="loginPass" placeholder="Password" autocomplete="current-password">
+    <button id="loginBtn">Enter</button>
+    <div class="login-hint" id="loginHint">First time? The generic admin login is <code>admin</code> / <code>admin</code> — change it after you sign in (Users → reset pw).</div>
+    <div class="login-err" id="loginErr"></div>
+  </div>
+</div>
+
+<!-- App -->
+<div id="app" class="hidden">
+  <aside>
+    <div class="side-head">
+      <div class="brand">Agent <span>Portal</span></div>
+      <div class="sub" id="sideSub">agent:&lt;id&gt;:main sessions</div>
+    </div>
+    <div class="nav" id="nav"></div>
+    <div class="agent-filters" id="agentFilters">
+      <select id="gwFilter" title="filter by gateway"><option value="">All gateways</option></select>
+      <input id="agentSearch" type="search" placeholder="filter agents…" autocomplete="off">
+    </div>
+    <div id="agentList"></div>
+    <div class="side-foot">
+      <span class="who">
+        <span id="gwDot"></span>
+        <span id="whoAmI" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
+      </span>
+      <button id="logoutBtn">log out</button>
+    </div>
+  </aside>
+  <main>
+    <!-- Chat view -->
+    <div id="chatView" class="hidden" style="display:flex;flex-direction:column;height:100%;min-height:0;">
+      <div class="chat-head">
+        <div class="avatar" id="chatAvatar">💬</div>
+        <div class="who">
+          <div class="name" id="chatName">Pick an agent</div>
+          <div class="key" id="chatKey"></div>
+        </div>
+        <div class="actions">
+          <button id="reloadBtn" title="Reload history">↻ reload</button>
+        </div>
+      </div>
+      <div id="messages">
+        <div class="empty" id="emptyState">
+          <div class="big">👋</div>
+          <div class="hint">Pick an agent on the left to open its main session.<br>This portal talks to the gateway directly — no Telegram in between.</div>
+        </div>
+      </div>
+      <div id="composer">
+        <div id="ctxStrip" class="hidden">
+          <button id="ctxToggle" title="Show/hide the context block sent with your messages">🧠 <span id="ctxLabel">context</span> <span class="ctx-caret">▸</span></button>
+          <pre id="ctxBlock" class="hidden"></pre>
+        </div>
+        <div class="composer-row">
+          <textarea id="input" placeholder="Message… (Enter to send, Shift+Enter for newline)"></textarea>
+          <button id="sendBtn">Send</button>
+          <button id="stopBtn">■ Stop</button>
+        </div>
+        <div id="approvalBanner" class="hidden">🛡 <b>Confirmations offline.</b> Approve the portal device's <code>operator.approvals</code> scope upgrade on the gateway to enable Approve/Deny on tool requests.</div>
+        <div class="composer-hint" id="composerHint">Replies stream live from the agent's own session. History stays with the agent.</div>
+      </div>
+    </div>
+
+    <!-- Management views -->
+    <div id="mgmtView" class="hidden"></div>
+  </main>
+</div>
+
+<div id="toast"></div>
+
+<script>
+'use strict';
+
+// ── tiny helpers ──
+const $ = (id) => document.getElementById(id);
+let toastTimer = null;
+function toast(msg, good) {
+  const t = $('toast');
+  t.textContent = msg;
+  t.classList.toggle('good', !!good);
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 4000);
+}
+async function api(path, opts) {
+  const res = await fetch(path, opts);
+  let data = null;
+  try { data = await res.json(); } catch {}
+  if (res.status === 401) { showLogin(); throw new Error('unauthorized'); }
+  if (!res.ok) throw new Error((data && data.error) || ('HTTP ' + res.status));
+  return data;
+}
+function escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function fmtTime(ts) {
+  if (!ts) return '';
+  const d = new Date(ts < 1e12 ? ts * 1000 : ts);
+  return d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+
+// ── state ──
+const state = {
+  me: null,             // { username, displayName, role }
+  agents: [],
+  servers: [],
+  current: null,        // { id, name, emoji, session }
+  es: null,             // EventSource
+  lastRunId: null,
+  runActive: false,
+  pendingEl: null,      // streaming bubble element
+  tools: new Map(),     // toolCallId -> receipt element state (live tool receipts)
+  approvals: new Map(), // approval id -> card element state
+  view: 'agents',       // agents | users | audit | students
+};
+
+// ── login ──
+function showLogin() {
+  $('login').classList.remove('hidden');
+  $('app').classList.add('hidden');
+  $('loginUser').value = '';
+  $('loginPass').value = '';
+  $('loginUser').focus();
+}
+function hideLogin() {
+  $('login').classList.add('hidden');
+  $('app').classList.remove('hidden');
+}
+async function doLogin() {
+  $('loginErr').textContent = '';
+  try {
+    const data = await api('/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: $('loginUser').value.trim(), password: $('loginPass').value }),
+    });
+    state.me = data.user;
+    hideLogin();
+    await initApp();
+  } catch (e) {
+    $('loginErr').textContent = e.message === 'unauthorized' || e.message === 'wrong username or password' ? 'Wrong username or password' : e.message;
+  }
+}
+
+// ── app init + nav ──
+async function initApp() {
+  buildNav();
+  renderWhoAmI();
+  loadCtxStrip();
+  const gf = $('gwFilter');
+  if (gf) gf.addEventListener('change', onAgentFiltersChanged);
+  const as = $('agentSearch');
+  if (as) as.addEventListener('input', onAgentFiltersChanged);
+  setView('agents');
+  await loadAgents();
+  if (state.agents.length) selectAgent(state.agents[0]);
+}
+
+function renderWhoAmI() {
+  const m = state.me;
+  $('whoAmI').innerHTML = `${escapeHtml(m.displayName)} <span class="role-chip ${escapeHtml(m.role)}">${escapeHtml(m.role)}</span>`;
+  const subs = {
+    admin: 'full access · manage accounts',
+    instructor: 'all agents · student roster',
+    student: 'your assigned agents',
+  };
+  $('sideSub').textContent = subs[m.role] || 'agent sessions';
+  $('composerHint').textContent = m.role === 'student'
+    ? 'You can only talk to your assigned agents. Everything is logged.'
+    : 'Replies stream live from the agent\'s own session. History stays with the agent.';
+  const t = $('ctxToggle');
+  if (t) t.addEventListener('click', toggleCtxBlock);
+}
+
+function buildNav() {
+  const nav = $('nav');
+  nav.innerHTML = '';
+  const m = state.me;
+  const items = [];
+  items.push({ key: 'agents', label: 'Agents' });
+  if (m.role === 'admin' || m.role === 'instructor') {
+    items.push({ key: 'dashboard', label: 'Dashboard' });
+  }
+  if (m.role === 'admin') {
+    items.push({ key: 'users', label: 'Users' });
+    items.push({ key: 'gateways', label: 'Gateways' });
+    items.push({ key: 'audit', label: 'Audit' });
+  }
+  if (m.role === 'instructor') {
+    items.push({ key: 'students', label: 'Students' });
+  }
+  if (m.role === 'admin' || m.role === 'instructor') {
+    items.push({ key: 'rooms', label: 'Rooms' });
+  }
+  for (const it of items) {
+    const b = document.createElement('button');
+    b.textContent = it.label;
+    b.dataset.view = it.key;
+    b.addEventListener('click', () => setView(it.key));
+    nav.appendChild(b);
+  }
+}
+
+function setView(view) {
+  state.view = view;
+  document.querySelectorAll('.nav button').forEach(b => b.classList.toggle('active', b.dataset.view === view));
+  closeStream();
+  const chat = $('chatView');
+  const mgmt = $('mgmtView');
+  if (view === 'agents') {
+    chat.classList.remove('hidden');
+    mgmt.classList.add('hidden');
+    $('agentList').style.display = '';
+    renderAgentList();
+  } else {
+    chat.classList.add('hidden');
+    $('agentList').style.display = 'none';
+    mgmt.classList.remove('hidden');
+    mgmt.style.display = '';
+    mgmt.style.flexDirection = '';
+    if (view === 'dashboard') renderDashboard();
+    else if (view === 'users') renderUsers();
+    else if (view === 'gateways') renderGateways();
+    else if (view === 'audit') renderAudit();
+    else if (view === 'students') renderStudents();
+    else if (view === 'rooms') renderRooms();
+  }
+}
+
+// ── CI30 context strip (students see what gets injected) ──
+async function loadCtxStrip() {
+  const strip = $('ctxStrip');
+  if (!strip) return;
+  strip.classList.add('hidden');
+  if (state.me.role !== 'student') return;
+  try {
+    const data = await api('/api/context');
+    const block = data.own && data.own.block;
+    if (!block) return;
+    const course = data.course || {};
+    $('ctxLabel').textContent = `${course.code || 'CI30'} · context injected with your messages`;
+    $('ctxBlock').textContent = block;
+    strip.classList.remove('hidden');
+  } catch { /* portal still usable without context */ }
+}
+
+function toggleCtxBlock() {
+  const t = $('ctxToggle');
+  const b = $('ctxBlock');
+  const open = b.classList.toggle('hidden');
+  t.classList.toggle('open', !open);
+}
+
+// ── context editor modal (instructor/admin) ──
+function closeModal() {
+  const o = document.querySelector('.modal-overlay');
+  if (o) o.remove();
+}
+
+function openUserContextEditor(username) {
+  const m = state.me;
+  api('/api/context').then(async (data) => {
+    const ctx = (data.users && data.users[username] && data.users[username].context) || {};
+    const course = data.course || {};
+    const asgOpts = (course.assignments || [])
+      .map(a => `<option value="${escapeHtml(a.id)}"${ctx.assignment === a.id ? ' selected' : ''}>${escapeHtml(a.id)} — ${escapeHtml(a.title)}</option>`)
+      .join('') || '<option value="">(no assignments)</option>';
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = `
+      <div class="modal">
+        <h3>Context — @${escapeHtml(username)}</h3>
+        <div class="sub">Injected ahead of this student's messages so agents know who they're helping.</div>
+        <label><input type="checkbox" id="ctxEnabled" ${ctx.enabled !== false ? 'checked' : ''}> Enable context injection</label>
+        <label>Assignment</label>
+        <select id="ctxAssignment"><option value="">(none)</option>${asgOpts}</select>
+        <label>Profile</label>
+        <textarea id="ctxProfile" placeholder="e.g. First-year; comfortable with Python">${escapeHtml(ctx.profile || '')}</textarea>
+        <label>Notes</label>
+        <textarea id="ctxNotes" placeholder="e.g. stuck on streaming, needs examples">${escapeHtml(ctx.notes || '')}</textarea>
+        <div class="modal-actions">
+          <button id="ctxCancel">Cancel</button>
+          <button class="btn-primary" id="ctxSave">Save</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelector('#ctxCancel').addEventListener('click', closeModal);
+    overlay.querySelector('#ctxSave').addEventListener('click', async () => {
+      const payload = {
+        enabled: overlay.querySelector('#ctxEnabled').checked,
+        assignment: overlay.querySelector('#ctxAssignment').value,
+        profile: overlay.querySelector('#ctxProfile').value.trim(),
+        notes: overlay.querySelector('#ctxNotes').value.trim(),
+      };
+      try {
+        await api('/api/users/' + encodeURIComponent(username) + '/context', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+        });
+        toast('Context saved for @' + username, true);
+        closeModal();
+        if (state.view === 'users') refreshUsersTable();
+        else if (state.view === 'students') renderStudents();
+      } catch (e) { toast(e.message); }
+    });
+  }).catch(e => toast(e.message));
+}
+
+function openCourseContextEditor() {
+  api('/api/context').then((data) => {
+    const c = data.course || {};
+    const assignments = (c.assignments || [])
+      .map(a => `${a.id} | ${a.title} | ${a.due || ''} | ${a.brief || ''}`)
+      .join('\n');
+    // Per-assignment policy (item 4): one line per assignment, 5th field = policy
+    // text. Format: id | title | due | brief | blocked:<a,b> allowed:<c,d> rules…
+    const policies = (c.assignments || [])
+      .filter(a => a.policy && (a.policy.blockedTools?.length || a.policy.allowedTools?.length || a.policy.rules?.length))
+      .map(a => {
+        const bits = [];
+        if (a.policy.blockedTools?.length) bits.push('blocked:' + a.policy.blockedTools.join(','));
+        if (a.policy.allowedTools?.length) bits.push('allowed:' + a.policy.allowedTools.join(','));
+        if (a.policy.rules?.length) bits.push(a.policy.rules.join(' '));
+        return `${a.id} | ${bits.join(' ')}`;
+      })
+      .join('\n');
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = `
+      <div class="modal">
+        <h3>Course context</h3>
+        <div class="sub">Shown to agents when students send messages.</div>
+        <label>Course code</label><input type="text" id="ccCode" value="${escapeHtml(c.code || '')}">
+        <label>Name</label><input type="text" id="ccName" value="${escapeHtml(c.name || '')}">
+        <label>Term</label><input type="text" id="ccTerm" value="${escapeHtml(c.term || '')}">
+        <label>Syllabus / notes</label>
+        <textarea id="ccSyllabus" style="min-height:70px;">${escapeHtml(c.syllabus || '')}</textarea>
+        <label>Assignments (one per line: <code>id | title | due | brief</code>)</label>
+        <textarea id="ccAssignments" style="min-height:80px;font-family:ui-monospace,monospace;font-size:12px;">${escapeHtml(assignments)}</textarea>
+        <label>Policies (one per line: <code>id | blocked:a,b allowed:c,d rules text…</code>)</label>
+        <textarea id="ccPolicies" style="min-height:60px;font-family:ui-monospace,monospace;font-size:12px;">${escapeHtml(policies)}</textarea>
+        <div class="modal-actions">
+          <button id="ccCancel">Cancel</button>
+          <button class="btn-primary" id="ccSave">Save</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelector('#ccCancel').addEventListener('click', closeModal);
+    overlay.querySelector('#ccSave').addEventListener('click', async () => {
+      const lines = overlay.querySelector('#ccAssignments').value.split('\n').map(s => s.trim()).filter(Boolean);
+      const assignments = lines.map(l => {
+        const [id, title, due, ...briefParts] = l.split('|').map(s => s.trim());
+        return { id: id || '', title: title || '', due: due || '', brief: briefParts.join('|').trim() };
+      }).filter(a => a.id && a.title);
+      // Parse policies: id | blocked:a,b allowed:c,d rules… (rules = any trailing text)
+      const policyMap = {};
+      for (const line of overlay.querySelector('#ccPolicies').value.split('\n').map(s => s.trim()).filter(Boolean)) {
+        const [pid, ...rest] = line.split('|').map(s => s.trim());
+        if (!pid || !rest.length) continue;
+        const pol = { allowedTools: [], blockedTools: [], rules: [] };
+        const rules = [];
+        // Fields are space-separated: tokens starting with blocked:/allowed: are
+        // tool lists; anything else accumulates into the rules text.
+        for (const tok of rest.join(' ').split(/\s+/)) {
+          if (tok.startsWith('blocked:')) pol.blockedTools = tok.slice(8).split(',').map(s => s.trim()).filter(Boolean);
+          else if (tok.startsWith('allowed:')) pol.allowedTools = tok.slice(8).split(',').map(s => s.trim()).filter(Boolean);
+          else if (tok) rules.push(tok);
+        }
+        pol.rules = rules.join(' ').trim();
+        if (pol.blockedTools.length || pol.allowedTools.length || pol.rules) policyMap[pid] = pol;
+      }
+      for (const a of assignments) if (policyMap[a.id]) a.policy = policyMap[a.id];
+      const payload = {
+        code: overlay.querySelector('#ccCode').value.trim(),
+        name: overlay.querySelector('#ccName').value.trim(),
+        term: overlay.querySelector('#ccTerm').value.trim(),
+        syllabus: overlay.querySelector('#ccSyllabus').value.trim(),
+        assignments,
+      };
+      try {
+        await api('/api/context/course', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+        });
+        toast('Course context saved', true);
+        closeModal();
+      } catch (e) { toast(e.message); }
+    });
+  }).catch(e => toast(e.message));
+}
+
+// ── agents ──
+async function loadAgents() {
+  const data = await api('/api/agents');
+  state.agents = data.agents || [];
+  state.servers = data.servers || [];
+  $('gwDot').classList.toggle('on', !!data.connected);
+  buildGwFilter();
+  renderAgentList();
+  clearInterval(window._gwTimer);
+  window._gwTimer = setInterval(async () => {
+    try {
+      const d = await api('/api/agents');
+      $('gwDot').classList.toggle('on', !!d.connected);
+    } catch {}
+  }, 15000);
+}
+
+// Gateway filter dropdown: one option per server, plus "All gateways".
+// Rebuilt on each load so new servers appear; preserves the current choice
+// when it still exists.
+function buildGwFilter() {
+  const sel = $('gwFilter');
+  if (!sel) return;
+  const prev = sel.value;
+  const opts = (state.servers || []).map(s => `<option value="${escapeHtml(s.id)}">${escapeHtml(s.name)}</option>`).join('');
+  sel.innerHTML = '<option value="">All gateways</option>' + opts;
+  if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
+  else sel.value = '';
+}
+
+function renderAgentList() {
+  const list = $('agentList');
+  if (!list) return;
+  list.innerHTML = '';
+  const gw = $('gwFilter') ? $('gwFilter').value : '';
+  const q = ($('agentSearch') ? $('agentSearch').value : '').trim().toLowerCase();
+  const visible = state.agents.filter(a =>
+    (!gw || a.server === gw) &&
+    (!q || a.name.toLowerCase().includes(q) || a.id.toLowerCase().includes(q))
+  );
+  if (state.servers && state.servers.length) {
+    const srv = document.createElement('div');
+    srv.className = 'srvline';
+    srv.innerHTML = state.servers.map(s =>
+      `<span class="srv ${s.connected ? 'on' : 'off'}">● ${escapeHtml(s.name)}${s.connected ? ' · ' + (s.agentCount ?? 0) : ' · offline'}</span>`
+    ).join(' ');
+    list.appendChild(srv);
+  }
+  if (!visible.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty';
+    empty.innerHTML = state.agents.length
+      ? '<div class="big">🔍</div><div class="hint">No agents match this filter.</div>'
+      : '<div class="big">🔒</div><div class="hint">No agents assigned to your account yet.<br>Ask your instructor to assign you one.</div>';
+    list.appendChild(empty);
+    return;
+  }
+  for (const a of visible) {
+    const el = document.createElement('div');
+    el.className = 'agent';
+    el.dataset.id = a.id;
+    el.innerHTML = `
+      <div class="avatar">${a.emoji || '🤖'}</div>
+      <div class="meta">
+        <div class="name">${escapeHtml(a.name)} <span class="srvtag">${escapeHtml(a.serverName || a.server)}</span></div>
+        <div class="key">agent:${escapeHtml(a.id)}:main</div>
+      </div>`;
+    el.addEventListener('click', () => selectAgent(a));
+    list.appendChild(el);
+  }
+  // Keep the selection valid: if the currently-open agent is filtered out,
+  // switch to the first visible one so the chat pane never dangles.
+  if (state.current && !visible.some(a => a.id === state.current.id && a.server === state.current.server)) {
+    selectAgent(visible[0]);
+  } else if (!state.current && visible.length) {
+    selectAgent(visible[0]);
+  }
+}
+
+function onAgentFiltersChanged() {
+  renderAgentList();
+}
+
+// ── message rendering ──
+function extractText(content) {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content.filter(b => b && b.type === 'text' && typeof b.text === 'string').map(b => b.text).join('\n');
+  }
+  return '';
+}
+
+function addMessage(role, text, time) {
+  const empty = $('emptyState');
+  if (empty) empty.remove();
+  const wrap = document.createElement('div');
+  wrap.className = 'msg ' + role;
+  const t = document.createElement('span');
+  t.className = 'time';
+  t.textContent = fmtTime(time);
+  const b = document.createElement('div');
+  b.className = 'bubble';
+  b.textContent = text || '';
+  wrap.appendChild(role === 'user' || role === 'assistant' ? t : b);
+  if (role === 'user' || role === 'assistant') {
+    wrap.insertBefore(b, wrap.firstChild);
+    wrap.appendChild(t);
+  }
+  $('messages').appendChild(wrap);
+  scrollBottom();
+  return b;
+}
+
+function addToolLine(text) {
+  const empty = $('emptyState');
+  if (empty) empty.remove();
+  const wrap = document.createElement('div');
+  wrap.className = 'msg tool';
+  const b = document.createElement('div');
+  b.className = 'bubble';
+  b.textContent = text;
+  wrap.appendChild(b);
+  $('messages').appendChild(wrap);
+  scrollBottom();
+}
+
+function scrollBottom() {
+  const m = $('messages');
+  m.scrollTop = m.scrollHeight;
+}
+
+// ── session selection + SSE ──
+function selectAgent(a) {
+  state.current = { id: a.id, name: a.name, emoji: a.emoji, ref: a.ref, serverName: a.serverName, session: a.key || `agent:${a.id}:main` };
+  document.querySelectorAll('.agent').forEach(el => el.classList.toggle('active', el.dataset.id === a.id));
+  $('chatAvatar').textContent = a.emoji || '🤖';
+  $('chatName').textContent = a.name;
+  $('chatKey').textContent = `agent:${a.id}:main · ${a.serverName || a.server || ''}`;
+  closeStream();
+  $('messages').innerHTML = '';
+  $('messages').appendChild(Object.assign(document.createElement('div'), { className: 'empty', id: 'emptyState', innerHTML: '<div class="big">💬</div><div class="hint">Loading history…</div>' }));
+  loadHistory();
+  openStream(state.current.session);
+}
+
+async function loadHistory() {
+  if (!state.current) return;
+  try {
+    const data = await api('/api/history?session=' + encodeURIComponent(state.current.session));
+    $('messages').innerHTML = '';
+    state.tools.clear();
+    state.approvals.clear();
+    const msgs = data.messages || [];
+    if (!msgs.length) {
+      $('messages').appendChild(Object.assign(document.createElement('div'), { className: 'empty', id: 'emptyState', innerHTML: '<div class="big">👋</div><div class="hint">Fresh session — say hello.</div>' }));
+      return;
+    }
+    for (const m of msgs) {
+      if (m.role === 'tool') addToolLine(`⚙ ${m.toolName || 'tool'}`);
+      else addMessage(m.role, m.text, m.time);
+    }
+    scrollBottom();
+    loadApprovals(); // re-paint any pending approval cards (history reload wipes them)
+  } catch (e) {
+    toast('History failed: ' + e.message);
+  }
+}
+
+function openStream(session) {
+  const es = new EventSource('/api/stream?session=' + encodeURIComponent(session));
+  state.es = es;
+  es.addEventListener('chat', (ev) => {
+    let p;
+    try { p = JSON.parse(ev.data); } catch { return; }
+    if (!p || p.sessionKey !== session) return;
+    handleChatEvent(p);
+  });
+  es.addEventListener('tool', (ev) => {
+    let p;
+    try { p = JSON.parse(ev.data); } catch { return; }
+    handleToolEvent(p);
+  });
+  es.addEventListener('approval', (ev) => {
+    let p;
+    try { p = JSON.parse(ev.data); } catch { return; }
+    handleApprovalEvent(p);
+  });
+  es.onerror = () => { /* EventSource auto-reconnects */ };
+}
+
+function closeStream() {
+  if (state.es) { state.es.close(); state.es = null; }
+  state.lastRunId = null;
+  state.runActive = false;
+  state.pendingEl = null;
+  state.tools.clear();
+  state.approvals.clear();
+  $('stopBtn').classList.remove('visible');
+}
+
+function handleChatEvent(p) {
+  const text = extractText(p.message && p.message.content).trim();
+  if (p.state === 'delta') {
+    if (p.runId !== state.lastRunId) return;
+    if (!state.pendingEl) state.pendingEl = addMessage('assistant', '');
+    state.pendingEl.textContent = text || state.pendingEl.textContent;
+  } else if (p.state === 'final') {
+    if (p.runId === state.lastRunId) {
+      state.lastRunId = null;
+      state.runActive = false;
+      $('stopBtn').classList.remove('visible');
+      state.pendingEl = null;
+      loadHistory();
+    } else if (state.pendingEl) {
+      state.pendingEl.textContent = text || state.pendingEl.textContent;
+      state.pendingEl = null;
+    } else if (text) {
+      addMessage('assistant', text, p.message && p.message.timestamp);
+    }
+    scrollBottom();
+  }
+}
+
+// ── tool receipts (live tool activity) ──
+function addReceipt(name, status) {
+  const empty = $('emptyState');
+  if (empty) empty.remove();
+  const wrap = document.createElement('div');
+  wrap.className = 'msg tool';
+  const card = document.createElement('div');
+  card.className = 'receipt';
+  card.innerHTML = `
+    <div class="receipt-head">
+      <span class="receipt-icon">🔧</span>
+      <span class="receipt-name">${escapeHtml(name || 'tool')}</span>
+      <span class="receipt-status running"></span>
+      <span class="receipt-detail"></span>
+    </div>
+    <details class="receipt-out">
+      <summary>output</summary>
+      <pre></pre>
+    </details>`;
+  wrap.appendChild(card);
+  $('messages').appendChild(wrap);
+  scrollBottom();
+  return {
+    el: card,
+    statusEl: card.querySelector('.receipt-status'),
+    detailEl: card.querySelector('.receipt-detail'),
+    pre: card.querySelector('pre'),
+    details: card.querySelector('.receipt-out'),
+  };
+}
+
+// Mark a receipt as blocked by the active assignment's policy (item 4).
+function markReceiptBlocked(t, assignmentId) {
+  if (!t) return;
+  const badge = document.createElement('span');
+  badge.className = 'receipt-blocked';
+  badge.textContent = `⛔ blocked by ${assignmentId || 'assignment'} policy`;
+  t.el.querySelector('.receipt-head').appendChild(badge);
+  t.el.classList.add('policy-blocked');
+}
+
+function updateReceipt(t, status, detail) {
+  if (!t) return;
+  t.statusEl.textContent = status === 'done' ? '✓' : (status === 'failed' ? '✗' : '…');
+  t.statusEl.className = 'receipt-status ' + status;
+  t.detailEl.textContent = detail ? '· ' + detail : '';
+  if (status !== 'running') t.details.open = false;
+}
+
+function appendReceiptOutput(t, text) {
+  if (!t || !text) return;
+  // command_output deltas carry the FULL accumulated output, not a diff —
+  // replace when the incoming text extends what we already have, append otherwise.
+  const cur = t.pre.textContent;
+  if (text.startsWith(cur)) t.pre.textContent = text;
+  else t.pre.textContent += text;
+  t.details.open = true;
+  scrollBottom();
+}
+
+function handleToolEvent(p) {
+  if (!state.current || !p.sessionKey || p.sessionKey !== state.current.session) return;
+  // item events and command_output events share the same toolCallId, so
+  // keying off it keeps one receipt per tool call.
+  const key = p.toolCallId || p.itemId || (p.stream + ':' + (p.ts || Date.now()));
+  if (p.stream === 'item') {
+    if (p.phase === 'start') {
+      // One tool call emits BOTH a kind:tool and a kind:command item with the
+      // same toolCallId — only create the receipt card once.
+      if (!state.tools.has(key)) state.tools.set(key, addReceipt(p.name || 'tool', 'running'));
+      if (p.policyBlocked) markReceiptBlocked(state.tools.get(key), p.policyAssignment);
+    } else if (p.phase === 'end') {
+      const ok = p.status === 'completed' || p.status === 'succeeded';
+      updateReceipt(state.tools.get(key), ok ? 'done' : 'failed', p.durationMs ? (p.durationMs / 1000).toFixed(1) + 's' : null);
+    }
+  } else if (p.stream === 'command_output') {
+    const t = state.tools.get(key);
+    if (t && p.output) appendReceiptOutput(t, p.output);
+    if (p.phase === 'end' && t) {
+      updateReceipt(t, p.exitCode === 0 ? 'done' : 'failed', p.durationMs ? (p.durationMs / 1000).toFixed(1) + 's' : null);
+    }
+  }
+}
+
+// ── tool confirmations (approval cards) ──
+function addApprovalCard(a) {
+  const empty = $('emptyState');
+  if (empty) empty.remove();
+  const wrap = document.createElement('div');
+  wrap.className = 'msg tool';
+  const card = document.createElement('div');
+  card.className = 'approval' + (a.status === 'pending' ? '' : ' ' + a.status);
+  const cmd = a.command || (a.title ? (a.title + (a.description ? ' — ' + a.description : '')) : 'tool action');
+  const warn = a.warningText ? `<div class="approval-warn">⚠ ${escapeHtml(a.warningText)}</div>` : '';
+  const who = a.agentId ? `<div class="approval-agent">agent: ${escapeHtml(a.agentId)}</div>` : '';
+  card.innerHTML = `
+    <div class="approval-head">🛡 ${a.kind === 'exec' ? 'Command approval needed' : 'Tool approval needed'}</div>
+    <code class="approval-cmd">${escapeHtml(cmd)}</code>
+    ${warn}${who}
+    <div class="approval-body"></div>`;
+  wrap.appendChild(card);
+  $('messages').appendChild(wrap);
+  scrollBottom();
+  const rec = { el: card, id: a.id, body: card.querySelector('.approval-body') };
+  renderApprovalBody(rec, a);
+  return rec;
+}
+
+function renderApprovalBody(rec, a) {
+  const me = state.me;
+  if (a.status === 'pending') {
+    if (a.canResolve && me && me.role !== 'student') {
+      rec.body.innerHTML = `
+        <button class="appr-yes">✓ Approve</button>
+        <button class="appr-no">✗ Deny</button>`;
+      rec.body.querySelector('.appr-yes').onclick = () => resolveApproval(a.id, 'approve');
+      rec.body.querySelector('.appr-no').onclick = () => resolveApproval(a.id, 'deny');
+    } else {
+      rec.body.innerHTML = '<span class="approval-wait">⏳ Waiting for staff approval…</span>';
+    }
+  } else {
+    const who = a.resolvedBy ? ' by ' + escapeHtml(a.resolvedBy) : '';
+    rec.body.innerHTML = a.status === 'approved'
+      ? `<span class="approval-ok">✓ Approved${who}</span>`
+      : `<span class="approval-no">✗ Denied${who}</span>`;
+  }
+}
+
+function updateApprovalCard(rec, a) {
+  if (!rec) return;
+  if (a.status !== 'pending') {
+    rec.el.classList.add(a.status);
+    renderApprovalBody(rec, a);
+  }
+}
+
+async function resolveApproval(id, decision) {
+  try {
+    const data = await api('/api/approvals/' + encodeURIComponent(id) + '/resolve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ decision }),
+    });
+    toast(decision === 'approve' ? 'Approved ✓' : 'Denied', decision === 'approve');
+    const rec = state.approvals.get(id);
+    if (rec && data.approval) updateApprovalCard(rec, data.approval);
+  } catch (e) {
+    toast('Resolve failed: ' + e.message);
+  }
+}
+
+function handleApprovalEvent(p) {
+  if (!state.current || !p.sessionKey || p.sessionKey !== state.current.session) return;
+  const existing = state.approvals.get(p.id);
+  if (existing) { updateApprovalCard(existing, p); return; }
+  state.approvals.set(p.id, addApprovalCard(p));
+}
+
+async function loadApprovals() {
+  if (!state.current) return;
+  try {
+    const data = await api('/api/approvals');
+    const me = state.me;
+    $('approvalBanner').classList.toggle('hidden', !(me && me.role !== 'student' && !data.scopeOk));
+    for (const a of (data.approvals || [])) {
+      if (a.status === 'pending' && a.sessionKey === state.current.session) handleApprovalEvent(a);
+    }
+  } catch { /* non-fatal */ }
+}
+
+// ── send ──
+async function send() {
+  const input = $('input');
+  const text = input.value.trim();
+  if (!text || !state.current || state.runActive) return;
+  input.value = '';
+  input.style.height = 'auto';
+  addMessage('user', text, Date.now());
+  state.runActive = true;
+  $('stopBtn').classList.add('visible');
+  try {
+    const data = await api('/api/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session: state.current.session, message: text }),
+    });
+    state.lastRunId = data.runId;
+    state.pendingEl = addMessage('assistant', '…');
+    state.pendingEl.classList.add('typing-dots');
+  } catch (e) {
+    state.runActive = false;
+    $('stopBtn').classList.remove('visible');
+    toast('Send failed: ' + e.message);
+    addMessage('assistant', '(message failed to send — ' + e.message + ')');
+  }
+}
+
+async function stopRun() {
+  if (!state.current || !state.lastRunId) return;
+  try {
+    await api('/api/abort', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session: state.current.session, runId: state.lastRunId }),
+    });
+  } catch {}
+}
+
+// ── Users view (admin) ──
+async function renderUsers() {
+  const mgmt = $('mgmtView');
+  mgmt.innerHTML = `
+    <div class="mgmt-head">
+      <h2>Users</h2>
+      <p>Local portal accounts. Students only see the agents they're assigned to.</p>
+      <button class="rowbtn" id="courseCtxBtn">course context</button>
+    </div>
+    <div class="card">
+      <h3>Add account</h3>
+      <div class="form-grid">
+        <div><label>Username</label><input id="nuUser" placeholder="e.g. alex"></div>
+        <div><label>Display name</label><input id="nuName" placeholder="Alex"></div>
+        <div><label>Role</label><select id="nuRole"><option value="student">student</option><option value="instructor">instructor</option><option value="admin">admin</option></select></div>
+        <div><label>Agents (comma-sep, * = all)</label><input id="nuAgents" placeholder="willow, ethan"></div>
+        <div><label>Password</label><input id="nuPass" type="text" placeholder="min 4 chars"></div>
+      </div>
+      <div class="form-actions"><button class="btn-primary" id="nuBtn">Create account</button></div>
+    </div>
+    <div class="card">
+      <h3>Accounts</h3>
+      <table id="usersTable"><thead><tr><th>Username</th><th>Name</th><th>Role</th><th>Agents</th><th></th></tr></thead><tbody></tbody></table>
+    </div>`;
+  $('nuBtn').addEventListener('click', createUser);
+  await refreshUsersTable();
+}
+
+async function refreshUsersTable() {
+  const data = await api('/api/users');
+  const tb = document.querySelector('#usersTable tbody');
+  tb.innerHTML = '';
+  for (const u of data.users) {
+    const tr = document.createElement('tr');
+    const agentTags = (u.agents && u.agents.length)
+      ? u.agents.map(a => `<span class="tag ${a === '*' ? 'all' : ''}">${escapeHtml(a)}</span>`).join('')
+      : '<span class="tag">none</span>';
+    tr.innerHTML = `
+      <td style="font-family:ui-monospace,monospace;">${escapeHtml(u.username)}</td>
+      <td>${escapeHtml(u.displayName)}</td>
+      <td><span class="role-chip ${escapeHtml(u.role)}">${escapeHtml(u.role)}</span></td>
+      <td>${agentTags}</td>
+      <td style="text-align:right;white-space:nowrap;">
+        <button class="rowbtn" data-act="ctx" data-u="${escapeHtml(u.username)}">context</button>
+        <button class="rowbtn" data-act="agents" data-u="${escapeHtml(u.username)}">agents</button>
+        <button class="rowbtn" data-act="pw" data-u="${escapeHtml(u.username)}">reset pw</button>
+        <button class="rowbtn danger" data-act="del" data-u="${escapeHtml(u.username)}">delete</button>
+      </td>`;
+    tb.appendChild(tr);
+  }
+  $('courseCtxBtn').addEventListener('click', openCourseContextEditor);
+  tb.querySelectorAll('button[data-act="ctx"]').forEach(b => b.addEventListener('click', () => openUserContextEditor(b.dataset.u)));
+  tb.querySelectorAll('button[data-act="agents"]').forEach(b => b.addEventListener('click', async () => {
+    const u = data.users.find(x => x.username === b.dataset.u);
+    const cur = (u && u.agents && u.agents.length) ? u.agents.join(', ') : '';
+    const val = prompt('Assigned agents for ' + b.dataset.u + '\n(comma-separated, * = all agents):', cur);
+    if (val === null) return;
+    const agents = val.split(',').map(s => s.trim()).filter(Boolean);
+    try {
+      await api('/api/users/' + encodeURIComponent(b.dataset.u) + '/agents', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agents }),
+      });
+      toast('Updated agents for ' + b.dataset.u, true);
+      refreshUsersTable();
+    } catch (e) { toast(e.message); }
+  }));
+  tb.querySelectorAll('button[data-act="pw"]').forEach(b => b.addEventListener('click', async () => {
+    const pw = prompt('New password for ' + b.dataset.u + ' (min 4 chars):');
+    if (!pw) return;
+    try {
+      await api('/api/users/' + encodeURIComponent(b.dataset.u) + '/password', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: pw }),
+      });
+      toast('Password reset for ' + b.dataset.u, true);
+      // If the generic admin just changed their own password, drop the nag banner.
+      const me = await api('/api/me');
+      if (me && !me.defaultCreds) {
+        const nag = $('defaultCredsBanner');
+        if (nag) nag.remove();
+      }
+    } catch (e) { toast(e.message); }
+  }));
+  tb.querySelectorAll('button[data-act="del"]').forEach(b => b.addEventListener('click', async () => {
+    if (!confirm('Delete account "' + b.dataset.u + '"?')) return;
+    try {
+      await api('/api/users/' + encodeURIComponent(b.dataset.u), { method: 'DELETE' });
+      toast('Deleted ' + b.dataset.u, true);
+      refreshUsersTable();
+    } catch (e) { toast(e.message); }
+  }));
+}
+
+async function createUser() {
+  const username = $('nuUser').value.trim();
+  const displayName = $('nuName').value.trim();
+  const role = $('nuRole').value;
+  const agents = $('nuAgents').value.split(',').map(s => s.trim()).filter(Boolean);
+  const password = $('nuPass').value;
+  if (!username || !password) { toast('username + password required'); return; }
+  try {
+    await api('/api/users', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, displayName, role, agents, password }),
+    });
+    toast('Created ' + username, true);
+    $('nuUser').value = $('nuName').value = $('nuPass').value = '';
+    $('nuAgents').value = '';
+    refreshUsersTable();
+  } catch (e) { toast(e.message); }
+}
+
+// ── Gateways view (admin: add/remove/edit gateway servers, Aug 2026) ──
+async function renderGateways() {
+  const mgmt = $('mgmtView');
+  mgmt.innerHTML = `
+    <div class="mgmt-head">
+      <h2>Gateways</h2>
+      <p>OpenClaw gateway servers this portal bridges to. Add/remove/edit live — no restart needed. Tokens are write-only (set once, never shown again).</p>
+    </div>
+    <div class="card">
+      <h3>Add gateway</h3>
+      <div class="form-row">
+        <label>ID <input id="gwId" placeholder="e.g. lab2" style="width:110px"></label>
+        <label>Name <input id="gwName" placeholder="Lab 2" style="width:150px"></label>
+        <label>URL <input id="gwUrl" placeholder="ws://192.168.1.50:18790" style="width:220px"></label>
+        <label>Token <input id="gwToken" placeholder="gateway token" style="width:200px"></label>
+        <label>Origin <input id="gwOrigin" placeholder="optional, e.g. http://127.0.0.1:18790" style="width:200px"></label>
+        <label class="chk"><input type="checkbox" id="gwEnabled" checked> enabled</label>
+        <button class="rowbtn" id="gwAdd">➕ Add</button>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Configured gateways</h3>
+      <div id="gwList" class="gw-list">
+        <div class="empty"><div class="hint">Loading…</div></div>
+      </div>
+    </div>`;
+  $('gwAdd').addEventListener('click', addGateway);
+  await refreshGateways();
+}
+
+async function refreshGateways() {
+  const wrap = $('gwList');
+  if (!wrap) return;
+  let data;
+  try { data = await api('/api/gateways'); } catch (e) { wrap.innerHTML = `<div class="empty"><div class="hint">${escapeHtml(e.message)}</div></div>`; return; }
+  const gws = data.gateways || [];
+  if (!gws.length) {
+    wrap.innerHTML = `<div class="empty"><div class="big">🔌</div><div class="hint">No gateways configured.</div></div>`;
+    return;
+  }
+  wrap.innerHTML = gws.map(g => {
+    const status = !g.enabled
+      ? '<span class="gw-dot off" title="disabled"></span><span class="muted">disabled</span>'
+      : g.connected
+        ? `<span class="gw-dot ok" title="connected"></span><span class="ok-text">connected · ${g.agentCount} agents</span>`
+        : '<span class="gw-dot err" title="offline"></span><span class="err-text">offline</span>';
+    return `<div class="gw-row" data-id="${escapeHtml(g.id)}">
+      <div class="gw-main">
+        <div class="gw-title">${escapeHtml(g.name)} <code>${escapeHtml(g.id)}</code></div>
+        <div class="muted">${escapeHtml(g.url)}${g.origin ? ' · origin ' + escapeHtml(g.origin) : ''} · token ${g.hasToken ? 'set' : '<em>none</em>'}</div>
+      </div>
+      <div class="gw-status">${status}</div>
+      <div class="gw-actions">
+        <button class="rowbtn" data-act="edit" title="edit">✏️</button>
+        <button class="rowbtn" data-act="toggle" title="${g.enabled ? 'disable' : 'enable'}">${g.enabled ? '⏸' : '▶️'}</button>
+        <button class="rowbtn" data-act="del" title="remove">🗑</button>
+      </div>
+    </div>`;
+  }).join('');
+  wrap.querySelectorAll('button[data-act="edit"]').forEach(b => b.addEventListener('click', () => editGateway(b.closest('.gw-row').dataset.id)));
+  wrap.querySelectorAll('button[data-act="toggle"]').forEach(b => b.addEventListener('click', async () => {
+    const id = b.closest('.gw-row').dataset.id;
+    const g = gws.find(x => x.id === id);
+    try {
+      await api('/api/gateways/' + encodeURIComponent(id), {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: !g.enabled }),
+      });
+      toast(g.enabled ? 'Gateway disabled' : 'Gateway enabled', true);
+      refreshGateways();
+      loadAgents(); // agent list changes when a server comes/goes
+    } catch (e) { toast(e.message); }
+  }));
+  wrap.querySelectorAll('button[data-act="del"]').forEach(b => b.addEventListener('click', async () => {
+    const id = b.closest('.gw-row').dataset.id;
+    if (!confirm('Remove gateway "' + id + '"? Its agents disappear from the portal.')) return;
+    try {
+      await api('/api/gateways/' + encodeURIComponent(id), { method: 'DELETE' });
+      toast('Gateway removed', true);
+      refreshGateways();
+      loadAgents();
+    } catch (e) { toast(e.message); }
+  }));
+}
+
+function gwFormValues() {
+  return {
+    id: $('gwId').value.trim(),
+    name: $('gwName').value.trim(),
+    url: $('gwUrl').value.trim(),
+    token: $('gwToken').value.trim(),
+    origin: $('gwOrigin').value.trim(),
+    enabled: $('gwEnabled').checked,
+  };
+}
+
+async function addGateway() {
+  const v = gwFormValues();
+  if (!v.url) { toast('URL required'); return; }
+  try {
+    await api('/api/gateways', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(v),
+    });
+    toast('Gateway added — connecting…', true);
+    $('gwUrl').value = $('gwToken').value = $('gwOrigin').value = '';
+    refreshGateways();
+    loadAgents();
+  } catch (e) { toast(e.message); }
+}
+
+async function editGateway(id) {
+  const g = (await api('/api/gateways')).gateways.find(x => x.id === id);
+  if (!g) return;
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal">
+      <h3>Edit gateway — ${escapeHtml(g.id)}</h3>
+      <div class="sub">Leave token blank to keep the existing one.</div>
+      <label>Name</label><input id="egName" value="${escapeHtml(g.name)}">
+      <label>URL</label><input id="egUrl" value="${escapeHtml(g.url)}">
+      <label>Token <span class="muted">(currently ${g.hasToken ? 'set' : 'none'})</span></label><input id="egToken" placeholder="${g.hasToken ? '•••••••• (leave blank to keep)' : 'set a token'}">
+      <label>Origin</label><input id="egOrigin" value="${escapeHtml(g.origin || '')}" placeholder="optional">
+      <label class="chk"><input type="checkbox" id="egEnabled" ${g.enabled ? 'checked' : ''}> enabled</label>
+      <div class="modal-actions">
+        <button id="egCancel">Cancel</button>
+        <button class="btn-primary" id="egSave">Save</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#egCancel').addEventListener('click', () => overlay.remove());
+  overlay.querySelector('#egSave').addEventListener('click', async () => {
+    const body = {
+      name: overlay.querySelector('#egName').value.trim(),
+      url: overlay.querySelector('#egUrl').value.trim(),
+      origin: overlay.querySelector('#egOrigin').value.trim(),
+      enabled: overlay.querySelector('#egEnabled').checked,
+    };
+    const tok = overlay.querySelector('#egToken').value.trim();
+    if (tok) body.token = tok;
+    try {
+      await api('/api/gateways/' + encodeURIComponent(g.id), {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      toast('Gateway updated', true);
+      overlay.remove();
+      refreshGateways();
+      loadAgents();
+    } catch (e) { toast(e.message); }
+  });
+}
+
+// ── Audit view (admin) ──
+// ── Audit view (Phase I groundwork + Aug 18 2026 polish) ──
+const ACTION_META = {
+  login:             { icon: '🔑', label: 'logged in',        tone: 'ok' },
+  logout:            { icon: '🚪', label: 'logged out',       tone: 'muted' },
+  login_failed:      { icon: '⛔', label: 'login failed',     tone: 'err' },
+  send:              { icon: '📤', label: 'sent a message',   tone: 'info' },
+  abort:             { icon: '⏹', label: 'stopped a run',    tone: 'warn' },
+  tool_policy_block: { icon: '🚫', label: 'policy block',     tone: 'err' },
+  room_message:      { icon: '💬', label: 'room message',     tone: 'info' },
+  room_create:       { icon: '➕', label: 'created a room',   tone: 'info' },
+  room_delete:       { icon: '🗑', label: 'deleted a room',   tone: 'warn' },
+  room_round:        { icon: '🔁', label: 'room round',       tone: 'info' },
+  user_create:       { icon: '👤', label: 'account created',  tone: 'ok' },
+  user_password:     { icon: '🔒', label: 'password reset',   tone: 'warn' },
+  user_delete:       { icon: '🗑', label: 'account deleted',  tone: 'warn' },
+  context_user:      { icon: '🧠', label: 'context updated',  tone: 'info' },
+  context_course:    { icon: '🎓', label: 'course context updated', tone: 'info' },
+  agent_assign:      { icon: '🏷', label: 'agent access updated', tone: 'info' },
+  gateway_add:       { icon: '🔌', label: 'gateway added',    tone: 'ok' },
+  gateway_update:    { icon: '🔧', label: 'gateway updated',  tone: 'warn' },
+  gateway_remove:    { icon: '🗑', label: 'gateway removed',  tone: 'warn' },
+};
+function auditMeta(a) { return ACTION_META[a] || { icon: '•', label: a, tone: 'muted' }; }
+
+// Render an audit detail object as friendly key/value chips, falling back to
+// compact JSON for unknown fields.
+function auditDetailHtml(d) {
+  if (!d) return '';
+  if (typeof d !== 'object') return `<span class="audit-kv">${escapeHtml(String(d))}</span>`;
+  const KEY_LABELS = {
+    target: 'user', room: 'room', session: 'session', server: 'server',
+    msg: 'message', tool: 'tool', rounds: 'rounds', injected: 'context',
+    agents: 'agents', assignment: 'assignment', text: 'text',
+  };
+  const parts = [];
+  for (const [k, v] of Object.entries(d)) {
+    if (v === undefined || v === null || v === '') continue;
+    if (k === 'injected') { parts.push(`<span class="audit-kv">context ${v ? 'injected' : 'as-is'}</span>`); continue; }
+    let val = v;
+    if (typeof v === 'object') val = JSON.stringify(v);
+    else if (k === 'msg' || k === 'text') val = String(v).slice(0, 80) + (String(v).length > 80 ? '…' : '');
+    else val = String(v);
+    const lab = KEY_LABELS[k] || k;
+    parts.push(`<span class="audit-kv"><em>${escapeHtml(lab)}</em> ${escapeHtml(val)}</span>`);
+  }
+  return parts.join(' ');
+}
+
+async function renderAudit() {
+  const mgmt = $('mgmtView');
+  mgmt.innerHTML = `
+    <div class="mgmt-head">
+      <h2>Audit log</h2>
+      <p>Append-only trail — logins, sends, rooms, policy blocks, account changes.</p>
+    </div>
+    <div class="audit-bar">
+      <div class="audit-chips" id="auditChips"></div>
+      <div class="audit-controls">
+        <input id="auditUser" class="audit-input" placeholder="filter user…" spellcheck="false">
+        <select id="auditAction" class="audit-input">
+          <option value="">all actions</option>
+        </select>
+        <select id="auditLimit" class="audit-input">
+          <option value="100">100</option>
+          <option value="250" selected>250</option>
+          <option value="500">500</option>
+        </select>
+        <button class="rowbtn" id="auditRefresh">↻ refresh</button>
+      </div>
+    </div>
+    <div class="card" id="auditCard"><div style="color:var(--muted);font-size:13px;">Loading…</div></div>`;
+  const actionSel = $('auditAction');
+  for (const a of Object.keys(ACTION_META)) {
+    const m = ACTION_META[a];
+    actionSel.insertAdjacentHTML('beforeend', `<option value="${escapeHtml(a)}">${m.icon} ${escapeHtml(m.label)}</option>`);
+  }
+  let data;
+  try { data = await api('/api/audit?limit=500'); } catch (e) { toast(e.message); return; }
+  const card = $('auditCard');
+  const chips = $('auditChips');
+  const entries = data.entries || [];
+  const byAction = {};
+  for (const e of entries) byAction[e.action] = (byAction[e.action] || 0) + 1;
+  const chipDefs = [
+    ['total', entries.length, ''],
+    ['🔑 logins', byAction.login || 0, ''],
+    ['🚫 blocks', byAction.tool_policy_block || 0, byAction.tool_policy_block ? 'warn' : ''],
+    ['📤 sends', (byAction.send || 0) + (byAction.room_message || 0), ''],
+  ];
+  chips.innerHTML = chipDefs.map(([l, n, cls]) =>
+    `<span class="audit-chip${cls ? ' ' + cls : ''}">${l} <b>${n}</b></span>`).join('');
+
+  const render = () => {
+    const userF = ($('auditUser').value || '').toLowerCase().trim();
+    const actF = $('auditAction').value;
+    const limit = parseInt($('auditLimit').value, 10) || 100;
+    let list = entries;
+    if (userF) list = list.filter(e => (e.user || '').toLowerCase().includes(userF));
+    if (actF) list = list.filter(e => e.action === actF);
+    list = list.slice(0, limit);
+    if (!list.length) {
+      card.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:6px 2px;">No events match.</div>';
+      return;
+    }
+    card.innerHTML = '';
+    for (const e of list) {
+      const meta = auditMeta(e.action);
+      const row = document.createElement('div');
+      row.className = 'audit-row';
+      row.innerHTML = `
+        <span class="audit-ico tone-${meta.tone}" title="${escapeHtml(e.action)}">${meta.icon}</span>
+        <span class="audit-time">${escapeHtml(fmtTime(e.ts))}</span>
+        <span class="audit-user">${escapeHtml(e.user)}</span>
+        <span class="audit-label tone-${meta.tone}">${escapeHtml(meta.label)}</span>
+        <span class="audit-detail">${auditDetailHtml(e.detail)}</span>`;
+      card.appendChild(row);
+    }
+  };
+  $('auditRefresh').addEventListener('click', () => { renderAudit(); });
+  $('auditUser').addEventListener('input', render);
+  $('auditAction').addEventListener('change', render);
+  $('auditLimit').addEventListener('change', render);
+  render();
+}
+
+// ── Dashboard view (instructor/admin, Phase I Aug 7 2026) ──
+const ACTION_LABELS = {
+  login: 'logged in', logout: 'logged out', send: 'sent a message',
+  abort: 'stopped a run', tool_policy_block: '⛔ policy block',
+  room_message: 'room message', room_create: 'created a room',
+  user_create: 'account created', user_password: 'password reset',
+  context_user: 'context updated', context_course: 'course context updated',
+  agent_assign: 'agent access updated', room_delete: 'deleted a room',
+};
+function actionLabel(a) { return ACTION_LABELS[a] || a; }
+
+async function renderDashboard() {
+  const mgmt = $('mgmtView');
+  mgmt.innerHTML = `
+    <div class="mgmt-head">
+      <h2>Dashboard</h2>
+      <p>Course pulse — roster, activity, and policy flags at a glance.</p>
+    </div>
+    <div class="card" id="dashCard"><div style="color:var(--muted);font-size:13px;">Loading…</div></div>`;
+  let data;
+  try { data = await api('/api/dashboard'); } catch (e) { toast(e.message); return; }
+  const card = $('dashCard');
+  const s = data.stats || {};
+  const course = data.course || {};
+  let html = `
+    <div class="dash-tiles">
+      <div class="tile"><div class="tile-n">${s.students ?? 0}</div><div class="tile-l">students</div></div>
+      <div class="tile"><div class="tile-n">${s.active24h ?? 0}</div><div class="tile-l">events · 24h</div></div>
+      <div class="tile"><div class="tile-n">${s.sends ?? 0}</div><div class="tile-l">messages sent</div></div>
+      <div class="tile${s.policyBlocks ? ' warn' : ''}"><div class="tile-n">${s.policyBlocks ?? 0}</div><div class="tile-l">⛔ policy blocks</div></div>
+    </div>
+    <div class="dash-cols">`;
+  // left col: assignments + roster
+  const byAsg = data.byAssignment || {};
+  html += `<div class="dash-col"><h3>${escapeHtml(course.code || 'Course')} · assignments</h3>`;
+  const asgs = course.assignments || [];
+  if (asgs.length) {
+    for (const a of asgs) {
+      const n = byAsg[a.id] || 0;
+      html += `<div class="dash-row"><span class="asg-tag">${escapeHtml(a.id)}</span><span class="grow">${escapeHtml(a.title)}${a.policy ? ' · policy' : ''}</span><span style="color:var(--muted)">${n} student${n === 1 ? '' : 's'}</span></div>`;
+    }
+  } else {
+    html += '<div style="color:var(--muted);font-size:12.5px;">No assignments configured yet.</div>';
+  }
+  if (byAsg['none']) html += `<div class="dash-row"><span class="asg-tag none">none</span><span class="grow" style="color:var(--muted)">no assignment set</span><span style="color:var(--muted)">${byAsg['none']}</span></div>`;
+  html += `<h3 style="margin-top:20px;">Roster (${(data.rows || []).length})</h3>`;
+  for (const r of (data.rows || [])) {
+    html += `<div class="dash-row">
+      <span class="grow"><b>${escapeHtml(r.displayName)}</b> <span style="color:var(--muted)">@${escapeHtml(r.username)}</span></span>
+      <span class="asg-tag${r.assignment ? '' : ' none'}">${escapeHtml(r.assignment || '—')}</span>
+      ${r.contextEnabled ? '<span class="b-on">🧠 on</span>' : '<span class="b-off">🧠 off</span>'}
+      <span style="color:var(--muted)">${r.lastSeen ? escapeHtml(fmtTime(r.lastSeen)) : '—'}</span>
+    </div>`;
+  }
+  html += `<div class="dash-quick">
+      <button class="rowbtn" id="dashStudents">Students</button>
+      <button class="rowbtn" id="dashRooms">Rooms</button>` +
+    (state.me.role === 'admin' ? '<button class="rowbtn" id="dashAudit">Audit log</button>' : '') +
+    `</div></div>`;
+  // right col: recent activity + violations
+  html += '<div class="dash-col"><h3>Recent activity</h3>';
+  const recent = data.recent || [];
+  if (!recent.length) html += '<div style="color:var(--muted);font-size:12.5px;">No student activity yet.</div>';
+  for (const e of recent) {
+    const d = e.detail ? ' ' + escapeHtml(JSON.stringify(e.detail)) : '';
+    html += `<div class="dash-row"><span style="color:var(--muted);flex:none;">${escapeHtml(fmtTime(e.ts))}</span><span class="grow">${escapeHtml(actionLabel(e.action))} · ${escapeHtml(e.user)}<span style="color:var(--muted)">${d}</span></span></div>`;
+  }
+  const blocks = data.blocks || [];
+  if (blocks.length) {
+    html += '<h3 style="margin-top:20px;">⛔ Policy violations</h3>';
+    for (const b of blocks) {
+      const d = b.detail || {};
+      html += `<div class="dash-row"><span style="color:var(--err);flex:none;">⛔</span><span class="grow">${escapeHtml(b.user)} · ${escapeHtml(d.assignment || 'policy')} · ${escapeHtml(d.tool || 'tool')} <span style="color:var(--muted)">(blocked)</span></span><span style="color:var(--muted);flex:none;">${escapeHtml(fmtTime(b.ts))}</span></div>`;
+    }
+  }
+  html += '</div></div>';
+  card.innerHTML = html;
+  const sBtn = $('dashStudents'); if (sBtn) sBtn.addEventListener('click', () => setView('students'));
+  const rBtn = $('dashRooms'); if (rBtn) rBtn.addEventListener('click', () => setView('rooms'));
+  const aBtn = $('dashAudit'); if (aBtn) aBtn.addEventListener('click', () => setView('audit'));
+}
+
+// ── Students view (instructor) ──
+async function renderStudents() {
+  const mgmt = $('mgmtView');
+  mgmt.innerHTML = `
+    <div class="mgmt-head">
+      <h2>Students</h2>
+      <p>Roster of student accounts and the agents each one is assigned to.</p>
+      <button class="rowbtn" id="rosterCtxBtn">course context</button>
+    </div>
+    <div class="card" id="rosterCard"><div style="color:var(--muted);font-size:13px;">Loading…</div></div>`;
+  let data;
+  try { data = await api('/api/users'); } catch (e) { toast(e.message); return; }
+  const card = $('rosterCard');
+  card.innerHTML = '';
+  if (!data.users.length) {
+    card.innerHTML = '<div style="color:var(--muted);font-size:13px;">No student accounts yet.</div>';
+    return;
+  }
+  for (const u of data.users) {
+    const line = document.createElement('div');
+    line.className = 'student-line';
+    line.innerHTML = `
+      <div class="avatar">👤</div>
+      <div class="meta">
+        <div class="name">${escapeHtml(u.displayName)}</div>
+        <div class="sub">@${escapeHtml(u.username)}</div>
+      </div>
+      <div class="agents">${(u.agents || []).map(a => `<span class="tag ${a === '*' ? 'all' : ''}">${escapeHtml(a)}</span>`).join('') || '<span class="tag">none</span>'}</div>
+      <button class="rowbtn" data-u="${escapeHtml(u.username)}">context</button>`;
+    card.appendChild(line);
+    line.querySelector('button').addEventListener('click', () => openUserContextEditor(u.username));
+  }
+  $('rosterCtxBtn').addEventListener('click', openCourseContextEditor);
+}
+
+// ── Rooms view (group chat / panel mode, instructor+) ──
+const ROOM_COLORS = ['#00d4e8', '#34d399', '#f59e0b', '#a78bfa', '#f87171', '#60a5fa', '#f472b6', '#4ade80', '#fbbf24', '#22d3ee', '#c084fc', '#fb923c'];
+const roomState = { current: null, es: null, runActive: false };
+
+// Agents are server-qualified refs ("home:willow") under the hood; the UI
+// prettifies them back to plain names when it can.
+function prettyAgent(ref) {
+  const a = state.agents.find(x => x.ref === ref);
+  return a ? a.name : ref;
+}
+function prettyRef(ref) {
+  const a = state.agents.find(x => x.ref === ref);
+  return a ? `${a.name} · ${a.serverName}` : ref;
+}
+
+async function renderRooms() {
+  closeRoomStream();
+  const mgmt = $('mgmtView');
+  mgmt.style.display = '';
+  mgmt.innerHTML = `
+    <div class="mgmt-head">
+      <h2>Rooms</h2>
+      <p>Group chat: put 2+ agents in a room. <b>Rounds</b> mode = one reply per agent per turn, you trigger it (loop-safe by construction). <b>Free-flow</b> mode = agents reply to each other on their own, with a pause button and a built-in reply budget per human message. Rooms persist across restarts.</p>
+    </div>
+    <div class="card">
+      <h3>New room</h3>
+      <div class="form-grid">
+        <div style="grid-column:span 2;"><label>Name</label><input id="nrName" placeholder="e.g. weekly brainstorm"></div>
+        <div style="grid-column:span 2;"><label>Agents (comma-separated, 2+ for free-flow)</label><input id="nrAgents" list="roomAgentsList" placeholder="willow, ethan, cora"></div>
+        <div style="grid-column:span 2;"><label>Mode</label><select id="nrMode">
+          <option value="rounds">Rounds — you trigger each turn (loop-safe)</option>
+          <option value="free">Free-flow — agents chat on their own (pause anytime)</option>
+        </select></div>
+      </div>
+      <datalist id="roomAgentsList"></datalist>
+      <div class="form-actions"><button class="btn-primary" id="nrBtn">Create room</button></div>
+    </div>
+    <div class="card">
+      <h3>Rooms</h3>
+      <div id="roomsList"><div style="color:var(--muted);font-size:13px;">Loading…</div></div>
+    </div>`;
+  const dl = $('roomAgentsList');
+  dl.innerHTML = '';
+  for (const a of state.agents) {
+    const o = document.createElement('option');
+    o.value = a.ref;
+    o.label = (a.serverName ? a.serverName + ' · ' : '') + a.name;
+    dl.appendChild(o);
+  }
+  $('nrBtn').addEventListener('click', createRoom);
+  await refreshRooms();
+}
+
+async function createRoom() {
+  const name = $('nrName').value.trim();
+  const agents = $('nrAgents').value.split(',').map(s => s.trim()).filter(Boolean);
+  const mode = $('nrMode').value;
+  if (!name || !agents.length) { toast('name + at least one agent required'); return; }
+  if (mode === 'free' && agents.length < 2) { toast('free-flow rooms need at least 2 agents'); return; }
+  try {
+    const data = await api('/api/rooms', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, agents, mode }),
+    });
+    toast('Room created', true);
+    $('nrName').value = ''; $('nrAgents').value = '';
+    openRoom(data.room.id);
+  } catch (e) { toast(e.message); }
+}
+
+async function refreshRooms() {
+  let data;
+  try { data = await api('/api/rooms'); } catch (e) { toast(e.message); return; }
+  const box = $('roomsList');
+  if (!box) return;
+  const rooms = data.rooms || [];
+  if (!rooms.length) { box.innerHTML = '<div style="color:var(--muted);font-size:13px;">No rooms yet — create one above.</div>'; return; }
+  box.innerHTML = '';
+  for (const r of rooms) {
+    const el = document.createElement('div');
+    el.className = 'room-line';
+    const dot = r.status === 'running' ? '🟡' : (r.status === 'paused' ? '⏸️' : '⚪');
+    const modeTag = r.mode === 'free' ? '<span class="tag" style="border-color:rgba(52,211,153,.5);color:var(--ok);">free-flow</span>' : '<span class="tag">rounds</span>';
+    const roundTag = r.mode === 'free' ? '' : `<span class="tag">round ${r.round}</span>`;
+    el.innerHTML = `
+      <div class="meta">
+        <div class="name">${escapeHtml(r.name)} ${modeTag} ${roundTag} <span style="font-size:11px;color:var(--muted);">${dot} ${escapeHtml(r.status)}${r.currentAgent ? ' · ' + escapeHtml(r.currentAgent) + '…' : ''}</span></div>
+        <div class="sub">${r.agents.map(a => `<span class="tag">${escapeHtml(a)}</span>`).join('')}</div>
+      </div>
+      <div style="margin-left:auto;text-align:right;white-space:nowrap;">
+        <button class="rowbtn" data-room="${escapeHtml(r.id)}" data-act="open">open</button>
+        <button class="rowbtn danger" data-room="${escapeHtml(r.id)}" data-act="del">delete</button>
+      </div>`;
+    box.appendChild(el);
+  }
+  box.querySelectorAll('button[data-act="open"]').forEach(b => b.addEventListener('click', () => openRoom(b.dataset.room)));
+  box.querySelectorAll('button[data-act="del"]').forEach(b => b.addEventListener('click', async () => {
+    if (!confirm('Delete room?')) return;
+    try {
+      await api('/api/rooms/' + encodeURIComponent(b.dataset.room), { method: 'DELETE' });
+      toast('Room deleted', true);
+      refreshRooms();
+    } catch (e) { toast(e.message); }
+  }));
+}
+
+function roomColorIdx(room, agentId) {
+  const i = (room.agents || []).indexOf(agentId);
+  return i < 0 ? null : i;
+}
+
+function roomBubble(m, room) {
+  const wrap = document.createElement('div');
+  const isUser = m.sender === 'user';
+  const isMeta = !!m.meta;
+  wrap.className = 'msg ' + (isUser ? 'user' : (isMeta ? 'tool' : 'assistant'));
+  const b = document.createElement('div');
+  b.className = 'bubble' + (isMeta ? ' meta' : '');
+  b.textContent = m.text || '';
+  if (!isUser && !isMeta) {
+    const idx = roomColorIdx(room, m.sender);
+    if (idx !== null) b.style.borderLeft = `3px solid ${ROOM_COLORS[idx % ROOM_COLORS.length]}`;
+    const label = document.createElement('div');
+    label.className = 'sender-label';
+    label.textContent = prettyAgent(m.sender);
+    wrap.appendChild(label);
+  }
+  if (isMeta) {
+    b.style.maxWidth = 'none';
+    b.style.padding = '2px 10px';
+  }
+  wrap.appendChild(b);
+  return wrap;
+}
+
+function appendRoomMsg(m, room) {
+  const box = $('roomMessages');
+  if (!box) return;
+  const empty = box.querySelector('.empty');
+  if (empty) empty.remove();
+  box.appendChild(roomBubble(m, room));
+  box.scrollTop = box.scrollHeight;
+}
+
+async function openRoom(id) {
+  closeRoomStream();
+  let data;
+  try { data = await api('/api/rooms/' + encodeURIComponent(id)); } catch (e) { toast(e.message); return; }
+  const r = data.room;
+  roomState.current = r;
+  roomState.runActive = r.status === 'running';
+  const mgmt = $('mgmtView');
+  mgmt.style.display = 'flex';
+  mgmt.style.flexDirection = 'column';
+  const isFree = r.mode === 'free';
+  const modeTag = isFree ? '<span class="tag" style="border-color:rgba(52,211,153,.5);color:var(--ok);">free-flow</span>' : `<span class="tag">rounds · round ${r.round}</span>`;
+  const roundsOpts = Array.from({ length: 10 }, (_, i) => `<option value="${i + 1}"${i === 0 ? ' selected' : ''}>${i + 1}</option>`).join('');
+  const composer = isFree ? `
+      <div class="composer-row" style="max-width:900px;margin:0 auto;">
+        <textarea id="roomInput" placeholder="Message the room… (agents reply on their own)"></textarea>
+        <button id="roomSend" class="btn-primary" style="height:46px;">Send</button>
+        <button id="roomPause" class="btn-primary" style="height:46px;background:linear-gradient(135deg,#f59e0b,#fbbf24);color:#241505;">${r.paused ? '▶ Resume' : '⏸ Pause'}</button>
+        <button id="roomStop" class="rowbtn danger" style="height:46px;">■ Stop</button>
+      </div>` : `
+      <div class="composer-row" style="max-width:900px;margin:0 auto;">
+        <textarea id="roomInput" placeholder="Message the room… (starts a round)"></textarea>
+        <button id="roomSend" class="btn-primary" style="height:46px;">Send</button>
+        <select id="roomRounds" title="rounds to run" style="height:46px;background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:10px;padding:0 8px;">${roundsOpts}</select>
+        <button id="roomRound" class="btn-primary" style="height:46px;background:linear-gradient(135deg,#34d399,#4ee3f5);">Next round</button>
+        <button id="roomStop" class="rowbtn danger" style="height:46px;">■ Stop</button>
+      </div>`;
+  mgmt.innerHTML = `
+    <div class="room-head">
+      <button class="rowbtn" id="roomBack">← back</button>
+      <div style="min-width:0;">
+        <div class="room-title">${escapeHtml(r.name)} ${modeTag}</div>
+        <div class="room-sub">${r.agents.map(a => `<span class="tag">${escapeHtml(prettyRef(a))}</span>`).join('')} · <span id="roomStatus">${escapeHtml(r.status)}${r.currentAgent ? ' · ' + escapeHtml(prettyAgent(r.currentAgent)) + ' thinking…' : ''}</span></div>
+      </div>
+      <div style="margin-left:auto;white-space:nowrap;">
+        <button class="rowbtn" id="roomAgents">✎ agents</button>
+      </div>
+    </div>
+    <div id="roomMessages"></div>
+    <div class="room-composer">${composer}</div>`;
+  $('roomBack').addEventListener('click', () => renderRooms());
+  $('roomSend').addEventListener('click', roomSend);
+  $('roomStop').addEventListener('click', roomStop);
+  $('roomStop').style.display = (roomState.runActive || (isFree && !r.paused)) ? 'block' : 'none';
+  if (isFree) {
+    $('roomPause').addEventListener('click', roomPauseToggle);
+  } else {
+    $('roomRound').addEventListener('click', roomNextRound);
+  }
+  $('roomAgents').addEventListener('click', roomEditAgents);
+  $('roomInput').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); roomSend(); } });
+  renderRoomTranscript(r.transcript || []);
+  openRoomStream(id);
+}
+
+function renderRoomTranscript(transcript) {
+  const box = $('roomMessages');
+  if (!box) return;
+  box.innerHTML = '';
+  if (!transcript.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty';
+    empty.innerHTML = '<div class="big">🛋️</div><div class="hint">Fresh room — drop a message or hit “Next round” to get the conversation going.</div>';
+    box.appendChild(empty);
+    return;
+  }
+  for (const m of transcript) box.appendChild(roomBubble(m, roomState.current));
+  box.scrollTop = box.scrollHeight;
+}
+
+function openRoomStream(id) {
+  const es = new EventSource('/api/rooms/' + encodeURIComponent(id) + '/stream');
+  roomState.es = es;
+  es.addEventListener('room', (ev) => {
+    let p;
+    try { p = JSON.parse(ev.data); } catch { return; }
+    if (!p || p.room !== id) return;
+    if (p.event === 'transcript' && p.data && p.data.message) {
+      appendRoomMsg(p.data.message, roomState.current);
+    } else if (p.event === 'status') {
+      const st = $('roomStatus');
+      if (st) st.textContent = p.data.status + (p.data.currentAgent ? ' · ' + prettyAgent(p.data.currentAgent) + ' thinking…' : '');
+      const isFree = roomState.current && roomState.current.mode === 'free';
+      roomState.current.paused = p.data.status === 'paused';
+      roomState.runActive = p.data.status === 'running';
+      const stop = $('roomStop');
+      if (stop) stop.style.display = (roomState.runActive || (isFree && !roomState.current.paused)) ? 'block' : 'none';
+      const pause = $('roomPause');
+      if (pause) pause.textContent = roomState.current.paused ? '▶ Resume' : '⏸ Pause';
+    }
+  });
+  es.onerror = () => { /* EventSource auto-reconnects */ };
+}
+
+function closeRoomStream() {
+  if (roomState.es) { roomState.es.close(); roomState.es = null; }
+}
+
+async function roomEditAgents() {
+  if (!roomState.current) return;
+  const r = roomState.current;
+  const val = prompt('Agents in this room\n(comma-separated; use server:agent to pin one server, e.g. home:willow, lab:labbot):', (r.agents || []).join(', '));
+  if (val === null) return;
+  const agents = val.split(',').map(s => s.trim()).filter(Boolean);
+  if (!agents.length) { toast('need at least one agent'); return; }
+  try {
+    const data = await api('/api/rooms/' + encodeURIComponent(r.id), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'agents', agents }),
+    });
+    roomState.current = data.room;
+    toast('Room agents updated', true);
+    const sub = $('roomSub');
+    if (sub) sub.innerHTML = data.room.agents.map(a => `<span class="tag">${escapeHtml(a)}</span>`).join('') + ' · <span id="roomStatus">idle</span>';
+  } catch (e) { toast(e.message); }
+}
+
+async function roomSend() {
+  const input = $('roomInput');
+  const text = input.value.trim();
+  if (!text || !roomState.current) return;
+  input.value = '';
+  input.style.height = 'auto';
+  // no optimistic append — the room SSE stream delivers the message
+  try {
+    await api('/api/rooms/' + encodeURIComponent(roomState.current.id), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'message', text }),
+    });
+  } catch (e) { toast(e.message); }
+}
+
+async function roomNextRound() {
+  if (!roomState.current || roomState.runActive) return;
+  const rounds = Math.max(1, Math.min(parseInt(($('roomRounds') || {}).value || '1', 10), 10));
+  try {
+    await api('/api/rooms/' + encodeURIComponent(roomState.current.id), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'round', rounds }),
+    });
+  } catch (e) { toast(e.message); }
+}
+
+async function roomPauseToggle() {
+  if (!roomState.current) return;
+  const action = roomState.current.paused ? 'resume' : 'pause';
+  try {
+    const data = await api('/api/rooms/' + encodeURIComponent(roomState.current.id), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action }),
+    });
+    roomState.current = data.room;
+    const pause = $('roomPause');
+    if (pause) pause.textContent = roomState.current.paused ? '▶ Resume' : '⏸ Pause';
+    const st = $('roomStatus');
+    if (st) st.textContent = roomState.current.paused ? 'paused' : 'idle';
+  } catch (e) { toast(e.message); }
+}
+
+async function roomStop() {
+  if (!roomState.current) return;
+  try {
+    await api('/api/rooms/' + encodeURIComponent(roomState.current.id), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'stop' }),
+    });
+  } catch (e) { toast(e.message); }
+}
+
+// ── wiring ──
+$('loginBtn').addEventListener('click', doLogin);
+$('loginPass').addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
+$('loginUser').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('loginPass').focus(); });
+$('sendBtn').addEventListener('click', send);
+$('input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+});
+$('input').addEventListener('input', () => {
+  $('input').style.height = 'auto';
+  $('input').style.height = Math.min($('input').scrollHeight, 160) + 'px';
+});
+$('stopBtn').addEventListener('click', stopRun);
+$('reloadBtn').addEventListener('click', loadHistory);
+$('logoutBtn').addEventListener('click', async () => {
+  try { await api('/api/logout', { method: 'POST' }); } catch {}
+  closeStream();
+  state.me = null;
+  showLogin();
+});
+
+// boot
+(async () => {
+  try {
+    const me = await api('/api/me');
+    if (me.authed) {
+      state.me = me.user;
+      hideLogin();
+      await initApp();
+    } else {
+      showLogin();
+      $('loginUser').focus();
+    }
+  } catch {
+    showLogin();
+  }
+})();
+</script>
+</body>
+</html>

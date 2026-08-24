@@ -1,0 +1,15 @@
+{
+  "port": 18800,
+  "bind": "0.0.0.0",
+  "gateways": [
+    {
+      "id": "home",
+      "name": "Home",
+      "url": "ws://127.0.0.1:18790",
+      "token": "REPLACE_WITH_GATEWAY_TOKEN",
+      "enabled": true
+    }
+  ],
+  "portalPassword": "REPLACE_ME",
+  "sessionTtlHours": 12
+}

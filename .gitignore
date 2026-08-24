@@ -1,0 +1,20 @@
+# ── Runtime state & secrets (never commit) ────────────────────────────────
+portal-config.json
+portal-config.json.bak*
+portal-config.json.*
+portal-device.json
+portal-users.json
+portal-rooms.json
+portal-context.json
+portal-audit.log
+portal.log
+
+# ── Local env / editor cruft ───────────────────────────────────────────────
+.env
+.env.*
+*.log
+*.swp
+.DS_Store
+
+# Separate mini-project (dev experiment) — not part of the portal release
+nexus.html

@@ -1,0 +1,37 @@
+services:
+  agent-portal:
+    build: .
+    container_name: agent-portal
+    restart: unless-stopped
+    # Host networking: the portal must reach the OpenClaw gateway on the
+    # host's loopback (ws://127.0.0.1:18790). With host net, UFW still
+    # governs port 18800 and `ports:` is not used.
+    network_mode: host
+    volumes:
+      # Device identity MUST persist — the gateway recognizes this device
+      # by its keypair. If it's regenerated, the portal re-pairs (works,
+      # but keep it stable across rebuilds).
+      - ./portal-device.json:/app/portal-device.json
+      - ./portal-config.json:/app/portal-config.json
+      # Phase I: local accounts + audit log persist on the host
+      - ./portal-users.json:/app/portal-users.json
+      - ./portal-audit.log:/app/portal-audit.log
+      # Group chat rooms persist too
+      - ./portal-rooms.json:/app/portal-rooms.json
+      # CI30 context injection store (course + per-user context)
+      - ./portal-context.json:/app/portal-context.json
+    # Port/bind come from portal-config.json (written by bootstrap.sh).
+    # Do NOT set PORT/BIND here — env overrides beat the config file in
+    # loadConfig(), which breaks per-server port choices. Overrides for
+    # ad-hoc runs are still available via `docker run -e`:
+    #   GATEWAY_URL / GATEWAY_TOKEN / PORTAL_PASSWORD / SESSION_TTL_HOURS
+    #   RECONNECT_BASE_MS / RECONNECT_MAX_MS
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
