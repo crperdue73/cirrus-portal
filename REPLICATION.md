@@ -33,7 +33,8 @@ This doc is the runbook for standing it up on any number of servers.
 | `portal.html` | The whole UI. Single file, vanilla JS. |
 | `Dockerfile` | Build recipe. |
 | `docker-compose.yml` | Runtime recipe (host networking, bind mounts, hardening). |
-| `bootstrap.sh` | This installer. |
+| `install.sh` | The professional installer (v2.0.0 — preflight, auto-detect, hardening, backup/restore). |
+| `bootstrap.sh` | Legacy installer (still works, superseded by `install.sh`). |
 | `reconnect-test.js` | Optional regression test. |
 
 **Never copy these (per-instance state — each server generates its own):**
@@ -74,28 +75,39 @@ The server is built so that the **only file you must provide is
 
 ---
 
-## 3. Quick start (5 commands)
+## 3. Quick start (2 commands)
+
+> **v2.0.0 (Aug 2026):** `install.sh` is now the canonical installer
+> (auto-detects the gateway token, generates a strong admin password, preflights
+> the host, hardens permissions, and can open the firewall). `bootstrap.sh`
+> below is the legacy path — it still works, but new installs should use
+> `install.sh`. Everything in this doc (what gets copied, approval, upgrade,
+> backup) applies to both.
 
 ```bash
-# 1. Get the code onto the new server (scp/rsync/git — your choice):
-scp -r portal/* user@new-server:/opt/agent-portal/
+# 1. Get the release onto the new server:
+scp dist/agent-portal-2.0.0.tar.gz user@new-server:/tmp/
 
-# 2. SSH in and install:
-cd /opt/agent-portal
-GATEWAY_TOKEN="<THIS server's gateway token>" ./bootstrap.sh --fresh
+# 2. SSH in and install (auto-detects the gateway token, generates a strong
+#    admin password, saves credentials to portal-credentials.txt):
+ssh user@new-server 'cd /tmp && tar xzf agent-portal-2.0.0.tar.gz \
+  && cd agent-portal-2.0.0 && ./install.sh install'
 
-# 3. Approve the portal device on the gateway:
-./bootstrap.sh --approve
+# 3. Check it:
+./install.sh status
 
-# 4. Check it:
-./bootstrap.sh --verify
-
-# 5. Open the UI:
-#    http://<server-ip>:18800   (admin password = the one bootstrap printed)
+# 4. Open the UI:
+#    http://<server-ip>:18800   (admin password is in portal-credentials.txt)
 ```
 
 That's it. From a cold server to a working portal in ~2 minutes, and the whole
-flow is repeatable per machine.
+flow is repeatable per machine. To approve the device, `install.sh install`
+already does it when `openclaw` is on PATH; otherwise approve manually
+(`openclaw devices list` → `openclaw devices approve <requestId>`) — or use
+`./bootstrap.sh --approve` for the legacy helper.
+
+Other commands: `./install.sh upgrade|status|doctor|backup|restore FILE|uninstall`
+(see `./install.sh --help`).
 
 ---
 
@@ -271,4 +283,5 @@ away. If a bad deploy got in, restore the files and `docker compose up -d
   design, so gate it behind an explicit environment (staging only).
 
 Built by Noah · Aug 1 2026 (v1) · replication kit Aug 6 2026 — "make sure this
-project can be replicated."
+project can be replicated." · professional installer v2.0.0 Aug 30 2026 —
+"polished professional install, ready for other servers."

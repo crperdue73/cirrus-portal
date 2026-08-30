@@ -16,5 +16,8 @@ portal.log
 *.swp
 .DS_Store
 
-# Separate mini-project (dev experiment) — not part of the portal release
-nexus.html
+# ── Installer / release artifacts ──────────────────────────────────────────
+install.log
+portal-credentials.txt
+backups/
+dist/

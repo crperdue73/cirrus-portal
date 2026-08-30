@@ -6,7 +6,57 @@ agent's **main session** (`agent:<agentId>:main`). History is the agent's real
 session history; replies stream live.
 
 > **📦 Replicating this on another server?** See [`REPLICATION.md`](REPLICATION.md)
-> + `./bootstrap.sh` — one command per server, code copies, state never does.
+> + `./install.sh` — the professional installer. One command per server, code
+> copies, state never does.
+
+## Professional install (v2.0.0, Aug 2026)
+
+`install.sh` is the polished, production-ready installer for standing the portal
+up on any Debian/Ubuntu server that runs an OpenClaw gateway:
+
+```bash
+# 1. Get the release onto the server:
+scp dist/agent-portal-2.0.0.tar.gz user@server:/tmp/
+
+# 2. Install:
+ssh user@server 'cd /tmp && tar xzf agent-portal-2.0.0.tar.gz && cd agent-portal-2.0.0 \
+  && ./install.sh install --firewall'
+
+# 3. Health-check it:
+./install.sh status
+```
+
+What it does for you (no manual steps except approving the device, which it
+will even do itself when `openclaw` is on PATH):
+
+- **Auto-detects the gateway token** from `~/.openclaw/openclaw.json` — no
+  hunting through config files.
+- **Generates a strong random admin password** on fresh installs and saves it
+  to `portal-credentials.txt` (0600) — no default-credential exposure.
+- **Preflight checks**: OS, disk space, Docker + Compose v2, port conflicts,
+  gateway reachability — fails fast with clear messages.
+- **Harden-permissions pass**: config + state + credentials all chmod 600.
+- **Optional firewall rule** (`--firewall`, ufw) and **device approval**
+  (`--approve` is the default; `--no-approve` to skip).
+- **Idempotent**: re-running `install` on a healthy box changes nothing.
+
+Full command set:
+
+```
+./install.sh install             # detect → configure → build → run
+./install.sh upgrade             # rebuild from current code, keep state
+./install.sh status              # scriptable health check (exit 0/1)
+./install.sh doctor              # deep diagnostics
+./install.sh backup              # state+config snapshot → ./backups/
+./install.sh restore FILE        # restore a snapshot
+./install.sh uninstall [--purge] # stop container (optionally delete files)
+./install.sh version
+```
+
+`release.sh` builds the versioned, checksummed distribution tarball
+(`dist/agent-portal-<ver>.tar.gz` + `SHA256SUMS`) that contains only code +
+installer + docs — never per-server state. The older `bootstrap.sh` remains
+as a legacy path; `install.sh` supersedes it.
 
 ## Multi-server (Aug 6 2026) — one portal, N gateway servers
 
