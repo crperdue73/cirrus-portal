@@ -71,8 +71,8 @@
   .side-head .brand span { color: var(--amber); }
   .side-head .sub { color: var(--muted); font-size: 11.5px; margin-top: 2px; }
 
-  /* role-aware nav */
-  .nav { display: flex; gap: 2px; padding: 8px 8px 4px; }
+  /* role-aware nav: vertical stack on desktop */
+  .nav { display: flex; flex-direction: column; gap: 2px; padding: 8px 8px 4px; }
   .nav button {
     flex: 1; padding: 7px 4px; border: 1px solid transparent; border-radius: 8px;
     background: transparent; color: var(--muted); font-size: 12px; font-weight: 600;
@@ -488,7 +488,7 @@
     aside { border-right: none; border-bottom: 1px solid var(--line); }
     .side-head { padding: 10px 14px 6px; }
     .side-head .sub { display: none; }
-    .nav { padding: 4px 8px 6px; overflow-x: auto; }
+    .nav { flex-direction: row; padding: 4px 8px 6px; overflow-x: auto; }
     .nav button { flex: 0 0 auto; padding: 7px 12px; }
     #messages { padding: 12px 12px; }
     .composer-row { max-width: none; }
