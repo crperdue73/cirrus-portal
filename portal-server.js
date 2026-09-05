@@ -1075,23 +1075,137 @@ function agentName(agentId) {
   return (a && a.name) || agentId;
 }
 
+// ── Anti-loop helpers (Sep 5 2026) ─────────────────────────────────────────
+// Rooms used to grind into echo loops: every agent was handed the same raw
+// transcript (so finished plot points got re-litigated) and was forced to
+// produce a reply even with nothing new to say (so they replayed their own
+// last beat, and the scene re-ran forever). Fixes, all deterministic, no
+// extra LLM calls:
+//   1. tokenSim()   — word-bigram Jaccard similarity for cheap dedup.
+//   2. condenseTranscript() — collapses near-duplicate messages before the
+//      prompt is built, so one repeated scene can't drown out new input.
+//   3. isPassReply() / [pass] — agents may explicitly pass instead of padding.
+//   4. appendAgentReply() — repeat guard: near-verbatim re-says of an agent's
+//      own earlier lines are dropped as meta notes instead of appended.
+//   5. runRound() auto-pauses when a whole round adds zero new content.
+function normWords(text) {
+  return String(text || '').toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter(w => w.length > 1);
+}
+function tokenSim(a, b) {
+  const A = normWords(a);
+  const B = normWords(b);
+  if (!A.length || !B.length) return 0;
+  const bigrams = arr => {
+    const s = new Set();
+    for (let i = 0; i < arr.length - 1; i++) s.add(arr[i] + ' ' + arr[i + 1]);
+    return s;
+  };
+  const SA = bigrams(A);
+  const SB = bigrams(B);
+  let inter = 0;
+  for (const x of SA) if (SB.has(x)) inter++;
+  const union = SA.size + SB.size - inter;
+  return union ? inter / union : 0;
+}
+
+// True when an agent explicitly declined to speak this turn.
+function isPassReply(text) {
+  const t = String(text || '').trim().toLowerCase().replace(/[’']/g, '');
+  return /^\(?pass\)?[\.\,\!\s]*$/.test(t)
+    || t.startsWith('[pass]')
+    || /^i (will |'?ll )?pass[.!\s]*$/.test(t);
+}
+
+// Collapse near-duplicate messages in the transcript window so repeated
+// scene replays appear once. User/system messages and meta notes always stay.
+// Walk newest→oldest so the freshest wording of a beat survives.
+// Threshold tuned on real stuck rooms (Sep 5): role-play loops REWRITE each
+// beat, so same-beat repeats score ~0.4-0.65 while distinct beats sit below
+// ~0.3. 0.45 on long messages collapses the replay without eating real turns.
+function condenseTranscript(room, maxRaw, maxKeep) {
+  const raw = room.transcript.slice(-(maxRaw || 60));
+  const kept = []; // newest-first while building
+  let dropped = 0;
+  for (let i = raw.length - 1; i >= 0; i--) {
+    const m = raw[i];
+    const isAgentText = !m.meta && m.sender && m.sender !== 'user' && m.sender !== 'system' && String(m.text || '').length > 200;
+    if (isAgentText) {
+      let dup = false;
+      for (const k of kept) {
+        if (k.meta || k.sender === 'user' || k.sender === 'system') continue;
+        if (tokenSim(m.text, k.text) >= 0.45) { dup = true; break; }
+      }
+      if (dup) { dropped++; continue; }
+    }
+    kept.push(m);
+    if (kept.length >= (maxKeep || 32)) break;
+  }
+  kept.reverse();
+  return { kept, dropped };
+}
+
+// Append an agent reply to the room with anti-loop guards. Returns true when
+// real content was appended; false when it was dropped (pass / near-repeat).
+const REPEAT_SKIP_SIM = 0.6; // catches rewritten re-says (real loops score 0.4-0.65)
+function appendAgentReply(room, agentRef, rawText) {
+  const text = String(rawText || '').trim();
+  if (!text) return false;
+  if (isPassReply(text)) {
+    pushRoomMsg(room, agentRef, '[passed — nothing new to add]', true);
+    return false;
+  }
+  if (text.length > 60) {
+    const own = room.transcript.filter(m => !m.meta && m.sender === agentRef).slice(-3);
+    for (const prev of own) {
+      const s = tokenSim(text, prev.text);
+      if (s >= REPEAT_SKIP_SIM) {
+        pushRoomMsg(room, agentRef, `[skipped — near-repeat of ${agentName(agentRef)}'s earlier reply (${Math.round(s * 100)}% similar)]`, true);
+        return false;
+      }
+    }
+  }
+  pushRoomMsg(room, agentRef, text);
+  return true;
+}
+
 function buildTurnPrompt(room, agentId, freeMode) {
   const others = room.agents.filter(a => a !== agentId).map(agentName).join(', ') || 'no one else yet';
+  const { kept, dropped } = condenseTranscript(room, 50, 20);
   const lines = [`Group chat: ${room.name}`, `Participants: ${room.agents.map(agentName).join(', ')}`, ''];
-  if (room.transcript.length) {
+  if (kept.length) {
+    // Split at the newest operator beat: everything before is backstory,
+    // everything after is the live exchange. Models anchor hard on the tail,
+    // so make the current beat unmistakable instead of burying it in a wall
+    // of agent replies replaying finished moments.
+    let beatAt = -1;
+    for (let i = kept.length - 1; i >= 0; i--) {
+      if (kept[i].sender === 'user') { beatAt = i; break; }
+    }
     lines.push('Conversation so far:');
-    for (const m of room.transcript.slice(-60)) {
+    for (let i = 0; i < kept.length; i++) {
+      const m = kept[i];
       const who = m.sender === 'user' ? 'the operator' : agentName(m.sender);
+      if (i === beatAt) {
+        lines.push('');
+        lines.push('--- CURRENT SCENE: the operator just said this — everything below reacts to it ---');
+        lines.push(`— the operator: ${String(m.text || '').slice(0, 800)}`);
+        continue;
+      }
       lines.push(`— ${who}: ${String(m.text || '').slice(0, 800)}`);
     }
-    lines.push('');
+    if (dropped > 0) lines.push(`(note: ${dropped} near-duplicate earlier message${dropped > 1 ? 's' : ''} condensed out — do not redo actions that already happened)`);
+    if (beatAt >= 0) lines.push('');
   }
+  const passRule = 'If the scene is resolved, the others have it handled, or you have nothing new to add, reply with exactly: [pass]. Passing is honest. Never redo an action another participant (or you) already performed — the moment is finished. Never recap or repeat lines; repeated actions get dropped.';
   if (freeMode) {
     lines.push(`It's your turn, ${agentName(agentId)}. You're in a free-flowing group chat with ${others} — people reply as the conversation moves, nobody waits for a formal turn.`);
-    lines.push('Reply naturally as yourself — concise, in character, no meta-commentary about the chat format. If you genuinely have nothing to add, keep it to one short line.');
+    lines.push(`Reply naturally as yourself — concise, in character, no meta-commentary about the chat format. ${passRule}`);
   } else {
     lines.push(`It's your turn, ${agentName(agentId)}. You're chatting with ${others} in a group conversation.`);
-    lines.push('Reply naturally as yourself — concise, in character, no meta-commentary about the chat format. This is one message in a round; every participant speaks once per round.');
+    lines.push(`Reply naturally as yourself — concise, in character, no meta-commentary about the chat format. This is one message in a round; every participant speaks once per round. ${passRule}`);
   }
   return lines.join('\n');
 }
@@ -1185,6 +1299,9 @@ async function runRound(room, byUser) {
   emitRoom(room, 'status', { status: 'running', round: room.round, currentAgent: null });
   saveRooms();
   audit('room_round', byUser || 'system', 'system', { room: room.id, round: room.round });
+  // Round health counters (anti-loop): asked = agents we actually prompted;
+  // added = real content appended; transportErr = send-time failures/timeouts.
+  let asked = 0, added = 0, transportErr = 0;
   try {
     for (const agentRef of room.agents) {
       if (room.stopRequested) break;
@@ -1193,10 +1310,12 @@ async function runRound(room, byUser) {
       const busyFor = agentBusy.get(refKey);
       if (busyFor && busyFor !== room.id) {
         pushRoomMsg(room, agentRef, `[skipped — ${agentName(agentRef)} is busy in another room]`, true);
+        transportErr++;
         continue;
       }
       if (!t) {
         pushRoomMsg(room, agentRef, `[${agentName(agentRef)} unreachable — server offline]`, true);
+        transportErr++;
         continue;
       }
       agentBusy.set(refKey, room.id);
@@ -1211,6 +1330,7 @@ async function runRound(room, byUser) {
           deliver: false,
           idempotencyKey: crypto.randomUUID(),
         }, 30000);
+        asked++;
         room.currentRunId = sent.runId;
         const sentAt = Date.now();
         let reply = await awaitAgentReply(room, agentRef, sent.runId, 240000, t.client);
@@ -1219,30 +1339,39 @@ async function runRound(room, byUser) {
           // Recover the real reply from history before declaring silence.
           const recovered = await historyFallbackReply(t.client, t.agentId, sentAt, 90000);
           if (recovered) {
-            pushRoomMsg(room, agentRef, recovered);
+            if (appendAgentReply(room, agentRef, recovered)) added++;
           } else if (reply.timedOut) {
             pushRoomMsg(room, agentRef, `[${agentName(agentRef)} timed out]`, true);
+            transportErr++;
           } else {
-            pushRoomMsg(room, agentRef, '[no reply]');
+            pushRoomMsg(room, agentRef, '[no reply]', true);
           }
         } else {
-          pushRoomMsg(room, agentRef, reply.text);
+          if (appendAgentReply(room, agentRef, reply.text)) added++;
         }
       } catch (e) {
         pushRoomMsg(room, agentRef, `[${agentName(agentRef)} failed: ${e.message}]`, true);
+        transportErr++;
       } finally {
         agentBusy.delete(refKey);
       }
+    }
+    // Auto-pause: a full round with zero new content means the room is
+    // looping or resolved. Don't keep grinding — surface it and stop.
+    if (asked > 0 && added === 0 && transportErr === 0) {
+      room.paused = true;
+      pushRoomMsg(room, 'system', `[Round ${room.round} added nothing new — every agent passed, repeated itself, or stayed quiet. Room auto-paused. Send a message or press Next round to continue.]`, true);
+      audit('room_autopause', byUser || 'system', 'system', { room: room.id, round: room.round });
     }
   } catch (e) {
     console.error('[portal] round crashed:', e.message);
     pushRoomMsg(room, 'system', `[round error: ${e.message}]`, true);
   } finally {
-    room.status = 'idle';
     room.currentAgent = null;
     room.currentRunId = null;
     room.stopRequested = false;
-    emitRoom(room, 'status', { status: 'idle', round: room.round, currentAgent: null });
+    room.status = room.paused ? 'paused' : 'idle';
+    emitRoom(room, 'status', { status: room.status, round: room.round, currentAgent: null });
     saveRooms();
   }
 }
@@ -1265,8 +1394,9 @@ async function stopRoomRound(room) {
 async function runRounds(room, byUser, count) {
   const n = Math.max(1, Math.min(parseInt(count, 10) || 1, 10));
   for (let i = 0; i < n; i++) {
-    if (room.stopRequested || room.status === 'running') break;
+    if (room.stopRequested || room.paused || room.status === 'running') break;
     await runRound(room, byUser);
+    if (room.paused) break; // auto-pause fired (empty round) — don't grind the rest
     if (i < n - 1) await sleep(900); // small beat between rounds so it reads naturally
   }
 }
@@ -1327,12 +1457,14 @@ async function freeflowTick(room) {
         const sentAt = Date.now();
         const reply = await awaitAgentReply(room, next, sent.runId, 240000, tNext.client);
         if (reply.text && reply.text.trim()) {
-          pushRoomMsg(room, next, reply.text.trim());
+          // [pass] and near-verbatim repeats land as meta notes — which also
+          // stops the free-flow cascade (the while loop ends on a meta tail).
+          appendAgentReply(room, next, reply.text.trim());
         } else {
           // Same ack-then-queue recovery as rounds mode; if history also has
           // nothing new, the agent genuinely stayed quiet — loop moves on.
           const recovered = await historyFallbackReply(tNext.client, tNext.agentId, sentAt, 45000);
-          if (recovered) pushRoomMsg(room, next, recovered);
+          if (recovered) appendAgentReply(room, next, recovered);
         }
       } catch (e) {
         pushRoomMsg(room, next, `[${agentName(next)} failed: ${e.message}]`, true);
@@ -2051,6 +2183,7 @@ async function handleApi(req, res, url) {
         const text = body.text;
         if (!text || !String(text).trim()) return json(res, 400, { error: 'need text' });
         pushRoomMsg(room, 'user', String(text).slice(0, 4000));
+        room.paused = false; // a human beat resumes an auto-paused room
         audit('room_message', user.username, user.role, { room: id, msg: String(text).slice(0, 120) });
         if (room.mode === 'free') {
           room.burstUsed = 0; // each human message grants a fresh burst budget
@@ -2062,6 +2195,7 @@ async function handleApi(req, res, url) {
       }
       if (action === 'round') {
         if (room.mode === 'free') return json(res, 400, { error: 'room is free-flowing — use pause/resume or send a message' });
+        room.paused = false; // explicit "next round" resumes an auto-paused room
         runRounds(room, user.username, body.rounds).catch(e => console.error('[portal] round error:', e.message));
         return json(res, 200, { ok: true, room: roomPublic(room) });
       }
