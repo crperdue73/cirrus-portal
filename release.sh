@@ -5,7 +5,7 @@
 #  Builds a clean, versioned, checksummed distribution tarball that can be
 #  copied to any number of servers and installed with one command.
 #
-#    ./release.sh [version]     # e.g. ./release.sh 2.0.0  (default: VERSION)
+#    ./release.sh [version]     # e.g. ./release.sh 2.1.0  (default: VERSION)
 #
 #  Produces:
 #    dist/agent-portal-<version>.tar.gz   — the distributable
@@ -19,7 +19,7 @@ set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$DIR"
 
-VERSION="${1:-$(cat VERSION 2>/dev/null || echo 2.0.0)}"
+VERSION="${1:-$(cat VERSION 2>/dev/null || echo 2.1.0)}"
 [ -f VERSION ] && [ "$(cat VERSION)" != "$VERSION" ] && echo "$VERSION" > VERSION
 
 PKG="agent-portal-$VERSION"

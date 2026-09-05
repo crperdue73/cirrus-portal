@@ -9,17 +9,23 @@ session history; replies stream live.
 > + `./install.sh` — the professional installer. One command per server, code
 > copies, state never does.
 
-## Professional install (v2.0.0, Aug 2026)
+## Professional install (v2.1.0, Sep 2026)
 
 `install.sh` is the polished, production-ready installer for standing the portal
 up on any Debian/Ubuntu server that runs an OpenClaw gateway:
 
+> **v2.1.0 (Sep 2026):** fixes the Rooms tab being unclickable — the desktop nav
+> now stacks vertically in the sidebar (regression from an Aug CSS edit where
+> the nav lost its `flex-direction` and overflowed under the chat pane);
+> ≤900px keeps the horizontal scroll strip. Rebuilt from the same code base as
+> v2.0.0 otherwise.
+
 ```bash
 # 1. Get the release onto the server:
-scp dist/agent-portal-2.0.0.tar.gz user@server:/tmp/
+scp dist/agent-portal-2.1.0.tar.gz user@server:/tmp/
 
 # 2. Install:
-ssh user@server 'cd /tmp && tar xzf agent-portal-2.0.0.tar.gz && cd agent-portal-2.0.0 \
+ssh user@server 'cd /tmp && tar xzf agent-portal-2.1.0.tar.gz && cd agent-portal-2.1.0 \
   && ./install.sh install --firewall'
 
 # 3. Health-check it:

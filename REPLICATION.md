@@ -33,7 +33,7 @@ This doc is the runbook for standing it up on any number of servers.
 | `portal.html` | The whole UI. Single file, vanilla JS. |
 | `Dockerfile` | Build recipe. |
 | `docker-compose.yml` | Runtime recipe (host networking, bind mounts, hardening). |
-| `install.sh` | The professional installer (v2.0.0 — preflight, auto-detect, hardening, backup/restore). |
+| `install.sh` | The professional installer (v2.1.0 — preflight, auto-detect, hardening, backup/restore). |
 | `bootstrap.sh` | Legacy installer (still works, superseded by `install.sh`). |
 | `reconnect-test.js` | Optional regression test. |
 
@@ -77,7 +77,7 @@ The server is built so that the **only file you must provide is
 
 ## 3. Quick start (2 commands)
 
-> **v2.0.0 (Aug 2026):** `install.sh` is now the canonical installer
+> **v2.1.0 (Sep 2026):** `install.sh` is the canonical installer
 > (auto-detects the gateway token, generates a strong admin password, preflights
 > the host, hardens permissions, and can open the firewall). `bootstrap.sh`
 > below is the legacy path — it still works, but new installs should use
@@ -86,12 +86,12 @@ The server is built so that the **only file you must provide is
 
 ```bash
 # 1. Get the release onto the new server:
-scp dist/agent-portal-2.0.0.tar.gz user@new-server:/tmp/
+scp dist/agent-portal-2.1.0.tar.gz user@new-server:/tmp/
 
 # 2. SSH in and install (auto-detects the gateway token, generates a strong
 #    admin password, saves credentials to portal-credentials.txt):
-ssh user@new-server 'cd /tmp && tar xzf agent-portal-2.0.0.tar.gz \
-  && cd agent-portal-2.0.0 && ./install.sh install'
+ssh user@new-server 'cd /tmp && tar xzf agent-portal-2.1.0.tar.gz \
+  && cd agent-portal-2.1.0 && ./install.sh install'
 
 # 3. Check it:
 ./install.sh status
@@ -283,5 +283,5 @@ away. If a bad deploy got in, restore the files and `docker compose up -d
   design, so gate it behind an explicit environment (staging only).
 
 Built by Noah · Aug 1 2026 (v1) · replication kit Aug 6 2026 — "make sure this
-project can be replicated." · professional installer v2.0.0 Aug 30 2026 —
+project can be replicated." · professional installer v2.1.0 Sep 4 2026 —
 "polished professional install, ready for other servers."
