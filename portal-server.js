@@ -1174,6 +1174,12 @@ function appendAgentReply(room, agentRef, rawText) {
 function buildTurnPrompt(room, agentId, freeMode) {
   const others = room.agents.filter(a => a !== agentId).map(agentName).join(', ') || 'no one else yet';
   const { kept, dropped } = condenseTranscript(room, 50, 20);
+  // Per-message readability cap. 800 was too small: a reply longer than that
+  // was cut mid-sentence when building the next agent's prompt, so agents
+  // literally could not read the full response. 6000 chars (~1500 tokens)
+  // keeps any real reply readable in full; the total-prompt budget below
+  // still bounds the damage in very chatty rooms.
+  const MAX_PER_MSG = 6000;
   const lines = [`Group chat: ${room.name}`, `Participants: ${room.agents.map(agentName).join(', ')}`, ''];
   if (kept.length) {
     // Split at the newest operator beat: everything before is backstory,
@@ -1191,10 +1197,10 @@ function buildTurnPrompt(room, agentId, freeMode) {
       if (i === beatAt) {
         lines.push('');
         lines.push('--- CURRENT SCENE: the operator just said this — everything below reacts to it ---');
-        lines.push(`— the operator: ${String(m.text || '').slice(0, 800)}`);
+        lines.push(`— the operator: ${String(m.text || '').slice(0, MAX_PER_MSG)}`);
         continue;
       }
-      lines.push(`— ${who}: ${String(m.text || '').slice(0, 800)}`);
+      lines.push(`— ${who}: ${String(m.text || '').slice(0, MAX_PER_MSG)}`);
     }
     if (dropped > 0) lines.push(`(note: ${dropped} near-duplicate earlier message${dropped > 1 ? 's' : ''} condensed out — do not redo actions that already happened)`);
     if (beatAt >= 0) lines.push('');
@@ -1207,7 +1213,24 @@ function buildTurnPrompt(room, agentId, freeMode) {
     lines.push(`It's your turn, ${agentName(agentId)}. You're chatting with ${others} in a group conversation.`);
     lines.push(`Reply naturally as yourself — concise, in character, no meta-commentary about the chat format. This is one message in a round; every participant speaks once per round. ${passRule}`);
   }
-  return lines.join('\n');
+  // Total-prompt budget: chat.send caps at 16000 chars, and naive head-slicing
+  // at the call site cut the NEWEST lines — the very scene the agent must
+  // react to — whenever a room got chatty. Trim oldest content first instead:
+  // the room header and turn instructions always survive, and backstory is
+  // dropped before the live exchange ever is.
+  const MAX_BODY = 15000;
+  const head = lines.slice(0, 3);      // room header
+  const instr = lines.slice(-2);       // turn instructions
+  const rest = lines.slice(3, -2);     // transcript body, oldest → newest
+  let budget = MAX_BODY - head.join('\n').length - instr.join('\n').length - 2;
+  const fitted = [];
+  for (let i = rest.length - 1; i >= 0; i--) {
+    const l = rest[i];
+    if (l.length + 1 > budget) continue; // over budget → drop from oldest end
+    fitted.unshift(l);
+    budget -= l.length + 1;
+  }
+  return head.concat(fitted, instr).join('\n');
 }
 
 // Wait for an agent's reply to finish by watching chat events. We match by
