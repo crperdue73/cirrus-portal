@@ -31,6 +31,7 @@ FILES=(
   install.sh
   portal-server.js
   portal.html
+  setup.html
   nexus.html
   Dockerfile
   docker-compose.yml

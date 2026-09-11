@@ -242,15 +242,21 @@ them** — enforced server-side on every endpoint (agents/history/send/abort/str
 
 Accounts live in `portal-users.json` (scrypt-hashed, chmod 600, bind-mounted).
 
-**No default credentials.** Fresh installs mint a single `admin` account with a
-strong, unique password — never a shared one:
+**No default credentials.** A fresh install gets its first admin one of two ways:
 
-- provide it yourself with `PORTAL_PASSWORD=...` (installer/bootstrap), or
-- let the server generate one; it is written to `portal-first-run.txt` (0600)
-on first boot and echoed to `portal-credentials.txt` by the installer.
+- **Installer / headless** — provide the password yourself with
+  `PORTAL_PASSWORD=...` (installer/bootstrap). The server mints the `admin`
+  account with it on first boot and the installer saves it to
+  `portal-credentials.txt` (0600).
+- **Bare `node portal-server.js` with nothing configured** — the server starts
+  in **setup mode** and serves a first-run wizard at `/setup`. Every other
+  route (including login) is refused until the wizard creates the admin with a
+  **strong password** (12+ chars, upper/lower/number, not your username), where
+  you also pick bind/port, TLS intent, and the first gateway. There is no
+  working default at any point.
 
-Change it after first login via **Users → reset pw**. No demo accounts are
-shipped. The server **refuses to start** if an admin account still uses a
+Change the password after first login via **Users → reset pw**. No demo accounts
+are shipped. The server **refuses to start** if an admin account still uses a
 known-default password (`admin`, `password`, `perdue-portal-2026`, …); a
 dev-only escape hatch is `PORTAL_ALLOW_INSECURE_DEFAULTS=1`.
 

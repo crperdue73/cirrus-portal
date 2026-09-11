@@ -33,7 +33,7 @@
   `secret-scan.sh` that greps the repo + a built tarball for tokens/keys and runs
   in CI.
 
-- [ ] **4. First-run setup wizard.**
+- [x] **4. First-run setup wizard.** ✅ 2026-09-11
   On a fresh box with no accounts, serve a browser wizard: create the admin
   account (strong-password enforced), pick bind/port, add the first gateway,
   choose TLS mode. No working default exists until the wizard completes.
@@ -155,3 +155,24 @@
   now bind-mounts it — before the next rebuild, create it (`printf '{}\n' > portal-secrets.json; chmod 600
   portal-secrets.json`, which `install.sh` also does) or Docker will bind a directory; the live token
   auto-migrates on first boot of the new code. No live deploy this run.
+
+- **2026-09-11** — ✅ **Item 4 done.** Fresh, unconfigured boxes now serve a **first-run
+  setup wizard** instead of minting a default admin. `loadUsers()` mints only when an
+  explicit bootstrap password exists (installer/headless — item 2 behavior preserved);
+  otherwise the portal enters **SETUP mode**: `/` 302→`/setup`, `GET /setup` serves the new
+  dependency-free **`setup.html`** (create admin, bind/port, TLS intent, first gateway), and
+  every other API — login included — returns `503 {setupRequired:true}`. New `POST /api/setup`
+  enforces a **strong password** (new `passwordPolicyError`, ≥12 chars + upper/lower/number,
+  no known-defaults, not the username), validates bind/port/TLS/gateway up front (nothing
+  half-applies), mints the admin, persists `tlsMode` to config, writes the gateway token to
+  `portal-secrets.json` (0600), returns a live session, and refuses re-runs (403). Extracted a
+  shared `createGateway()` used by both the wizard and `POST /api/gateways`. Docs updated
+  (README/REPLICATION/portal.html login hint); `setup.html` added to `release.sh` FILES +
+  `Dockerfile`. Evidence: `node --check` on server+test, `bash -n` on 4 scripts; new
+  **`test-setup.js` 3/3** (fresh→setup mode + all routes refused; weak pw rejected then valid
+  wizard mints + session works + setup closes; headless box skips wizard); regressions green:
+  `test-credentials.js` 3/3, `test-secrets.js` 3/3, `secret-scan.sh` clean (repo + freshly
+  built `dist/agent-portal-2.2.0.tar.gz`, which now contains `setup.html`). Commit `<pending>`.
+  **Follow-up:** bind/port chosen in the wizard persist to config but only apply on the next
+  restart (`restartRequired:true` is returned); real TLS termination still lands in item 5;
+  the wizard is not yet surfaced by `install.sh` messaging (item 10).

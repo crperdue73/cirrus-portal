@@ -44,7 +44,7 @@ This doc is the runbook for standing it up on any number of servers.
 | `portal-config.json` | Port, bind, gateway URLs/ids (TOKEN-FREE) | Must be written per server — bootstrap.sh does it. |
 | `portal-secrets.json` | **Gateway token(s)** + first-run admin password (0600) | Must be written per server — bootstrap.sh does it. Never backed up or shipped. |
 | `portal-device.json` | Ed25519 device identity the gateway trusts | **Auto-generated** on first boot. The gateway must approve this *specific* device. Copying one from another box creates a duplicate identity and breaks the trust model. |
-| `portal-users.json` | Local accounts + roles | **First run only**: if no admin exists, one is minted with a unique password (from `portalPassword`, or generated → `portal-first-run.txt`). Never a shipped default. |
+| `portal-users.json` | Local accounts + roles | **First run only** (installer): if no admin exists and a bootstrap password is configured, one is minted with it. With *nothing* configured the server serves the setup wizard instead — no account is created until the wizard completes. Never a shipped default. |
 | `portal-context.json` | CI30 course + per-user context | **Auto-seeded** with the default course store. |
 | `portal-rooms.json` | Group-chat rooms | Starts empty. |
 | `portal-audit.log` | Login/send/approval audit trail | Starts empty. |
@@ -260,7 +260,7 @@ away. If a bad deploy got in, restore the files and `docker compose up -d
 | `✗ no gateway on 127.0.0.1:18790` in preflight | Gateway not running / not loopback | Start gateway; confirm `gateway.bind: loopback`, port 18790 |
 | Port 18800 unreachable off-host | Firewall | `sudo ufw allow 18800/tcp` |
 | Can't approve: "requires operator.pairing" | Your CLI session lacks pairing scope | Run `openclaw devices approve` from a session with `operator.admin` (e.g. the gateway owner's shell) |
-| Admin password lost | — | Delete `portal-users.json` and restart — the server re-mints `admin` with a unique password written to `portal-first-run.txt` (0600) |
+| Admin password lost | — | Delete `portal-users.json` and restart — with `portalPassword` set the server re-mints `admin` with it (`portal-first-run.txt`), otherwise it serves the setup wizard at `/setup` to create a fresh admin |
 | Changed port ignored / `EADDRINUSE` on 18800 | Env override beat the config | Port comes only from `portal-config.json` now; edit it (or `PORT=... ./bootstrap.sh --force-config`) and `docker compose up -d` |
 
 ---

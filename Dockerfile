@@ -7,7 +7,7 @@ FROM node:22-alpine
 WORKDIR /app
 
 # Server + UI. Config and device identity persist via volumes (docker-compose.yml).
-COPY portal-server.js portal.html nexus.html branding.json ./
+COPY portal-server.js portal.html setup.html nexus.html branding.json ./
 
 EXPOSE 18800
 

@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cirrus Portal — Setup</title>
+<style>
+  :root {
+    --bg: #0a0a0a;
+    --panel: #141414;
+    --panel2: #1e1e1e;
+    --line: #2a2a2a;
+    --text: #e8e8e8;
+    --muted: #8f8f8f;
+    --slate: #73a3c8;
+    --amber: #00d4e8;
+    --amber2: #4ee3f5;
+    --ok: #34d399;
+    --err: #f87171;
+    --warn: #fbbf24;
+    --radius: 12px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    background: radial-gradient(1200px 600px at 50% -10%, #241d45 0%, var(--bg) 60%);
+    color: var(--text);
+    min-height: 100vh;
+    padding: 40px 16px 64px;
+  }
+  .wrap { max-width: 620px; margin: 0 auto; }
+  header { text-align: center; margin-bottom: 26px; }
+  header .logo { font-size: 46px; line-height: 1; }
+  header h1 { font-size: 24px; margin: 12px 0 4px; letter-spacing: .2px; }
+  header h1 .accent { color: var(--amber); }
+  header p { color: var(--muted); font-size: 13px; }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 16px;
+    padding: 24px 26px; margin-bottom: 16px; box-shadow: 0 20px 60px rgba(0,0,0,.35);
+  }
+  .card h2 { font-size: 15px; margin-bottom: 4px; display: flex; align-items: center; gap: 8px; }
+  .card .sub { color: var(--muted); font-size: 12.5px; margin-bottom: 16px; }
+  .step {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 22px; height: 22px; border-radius: 50%; font-size: 12px; font-weight: 700;
+    background: linear-gradient(135deg, var(--amber), var(--amber2)); color: #05272e;
+  }
+  label { display: block; font-size: 12.5px; color: var(--muted); margin: 12px 0 5px; }
+  input, select {
+    width: 100%; padding: 11px 13px; border-radius: 10px;
+    border: 1px solid var(--line); background: var(--panel2); color: var(--text);
+    font-size: 14.5px; outline: none;
+  }
+  input:focus, select:focus { border-color: var(--amber); }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .hint { color: var(--muted); font-size: 11.5px; margin-top: 6px; }
+  .inline-note { font-size: 12px; margin-top: 8px; min-height: 16px; }
+  .ok { color: var(--ok); }
+  .err { color: var(--err); }
+  .warn { color: var(--warn); }
+
+  .pw-meter { height: 5px; border-radius: 4px; background: var(--panel2); margin-top: 8px; overflow: hidden; }
+  .pw-meter > i { display: block; height: 100%; width: 0; background: var(--err); transition: width .2s, background .2s; }
+
+  button {
+    margin-top: 20px; width: 100%; padding: 13px; border: none; border-radius: 10px;
+    background: linear-gradient(135deg, var(--amber), var(--amber2)); color: #05272e;
+    font-weight: 700; font-size: 15px; cursor: pointer;
+  }
+  button:hover { filter: brightness(1.08); }
+  button:disabled { filter: grayscale(.6) brightness(.8); cursor: not-allowed; }
+
+  .banner {
+    display: none; margin-bottom: 16px; padding: 12px 14px; border-radius: 10px;
+    font-size: 13px; border: 1px solid var(--line); background: var(--panel2);
+  }
+  .banner.show { display: block; }
+  .banner.error { border-color: var(--err); color: #ffd9d9; }
+  .banner.done { border-color: var(--ok); color: #d6ffe9; }
+  .optional { color: var(--muted); font-weight: 400; font-size: 11.5px; }
+  .done-card { text-align: center; }
+  .done-card .big { font-size: 40px; margin-bottom: 10px; }
+  footer { text-align: center; color: var(--muted); font-size: 11.5px; margin-top: 22px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="logo">🟠</div>
+    <h1><span id="brandName">Cirrus</span> <span class="accent">Portal</span></h1>
+    <p id="brandTag">Mission control for your OpenClaw fleet.</p>
+  </header>
+
+  <div id="banner" class="banner"></div>
+
+  <div id="wizard">
+    <div class="card">
+      <h2><span class="step">1</span> Create the admin account</h2>
+      <div class="sub">This is the portal's first account. There is no default login — nothing works until this is done.</div>
+      <div class="row">
+        <div>
+          <label for="username">Username</label>
+          <input id="username" autocomplete="username" placeholder="admin" value="admin">
+        </div>
+        <div>
+          <label for="displayName">Display name <span class="optional">(optional)</span></label>
+          <input id="displayName" placeholder="Admin" autocomplete="name">
+        </div>
+      </div>
+      <label for="password">Password</label>
+      <input id="password" type="password" autocomplete="new-password" placeholder="at least 12 characters">
+      <div class="pw-meter"><i id="pwBar"></i></div>
+      <div id="pwHint" class="hint">Use 12+ characters with upper, lower and a number. Avoid your username.</div>
+      <label for="passwordConfirm">Confirm password</label>
+      <input id="passwordConfirm" type="password" autocomplete="new-password" placeholder="repeat the password">
+    </div>
+
+    <div class="card">
+      <h2><span class="step">2</span> Network &amp; TLS</h2>
+      <div class="sub">Where the portal listens and whether it terminates TLS. Changes to bind/port apply on the next restart.</div>
+      <div class="row">
+        <div>
+          <label for="bind">Bind address</label>
+          <input id="bind" placeholder="127.0.0.1">
+          <div class="hint">127.0.0.1 = local only · 0.0.0.0 = all interfaces</div>
+        </div>
+        <div>
+          <label for="port">Port</label>
+          <input id="port" inputmode="numeric" placeholder="18800">
+        </div>
+      </div>
+      <label for="tlsMode">TLS mode</label>
+      <select id="tlsMode">
+        <option value="auto">Automatic (Let's Encrypt via Caddy) — recommended for public hosts</option>
+        <option value="manual">Manual (reverse proxy terminates TLS)</option>
+        <option value="off">Off (local / trusted LAN only)</option>
+      </select>
+      <div class="hint">TLS wiring lands with the public installer; this records your choice in the config.</div>
+    </div>
+
+    <div class="card">
+      <h2><span class="step">3</span> First gateway <span class="optional">(optional)</span></h2>
+      <div class="sub">The OpenClaw gateway this portal should talk to. You can also add more later as an admin.</div>
+      <label for="gwUrl">Gateway WebSocket URL</label>
+      <input id="gwUrl" placeholder="ws://127.0.0.1:18790">
+      <div class="row">
+        <div>
+          <label for="gwName">Name <span class="optional">(optional)</span></label>
+          <input id="gwName" placeholder="Gateway">
+        </div>
+        <div>
+          <label for="gwToken">Token <span class="optional">(stored in secrets, never in config)</span></label>
+          <input id="gwToken" type="password" placeholder="optional">
+        </div>
+      </div>
+    </div>
+
+    <button id="submit">Create admin &amp; finish setup</button>
+    <footer>Cirrus Portal · setup wizard</footer>
+  </div>
+
+  <div id="done" class="card done-card" style="display:none">
+    <div class="big">✅</div>
+    <h2 style="justify-content:center">Setup complete</h2>
+    <div class="sub" id="doneMsg">Your admin account is ready. Redirecting to the portal…</div>
+    <button id="goNow">Open Cirrus Portal</button>
+  </div>
+</div>
+
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const banner = $('banner');
+  let minLen = 12;
+
+  function showBanner(msg, kind) {
+    banner.className = 'banner show ' + (kind || '');
+    banner.textContent = msg;
+  }
+
+  function scorePassword(pw) {
+    let s = 0;
+    if (pw.length >= minLen) s++;
+    if (pw.length >= 16) s++;
+    if (/[a-z]/.test(pw) && /[A-Z]/.test(pw)) s++;
+    if (/[0-9]/.test(pw)) s++;
+    if (/[^A-Za-z0-9]/.test(pw)) s++;
+    return Math.min(s, 4);
+  }
+
+  function updateMeter() {
+    const pw = $('password').value;
+    const s = scorePassword(pw);
+    const pct = [0, 25, 50, 75, 100][s];
+    const color = s <= 1 ? 'var(--err)' : s === 2 ? 'var(--warn)' : 'var(--ok)';
+    const bar = $('pwBar');
+    bar.style.width = pct + '%';
+    bar.style.background = color;
+  }
+
+  $('password').addEventListener('input', updateMeter);
+
+  // Load server-provided defaults (bind/port/tls/gateway + branding).
+  fetch('/api/setup/status', { headers: { 'Accept': 'application/json' } })
+    .then((r) => r.json())
+    .then((s) => {
+      if (s.product) document.title = s.product + ' — Setup';
+      if (s.product) {
+        const parts = String(s.product).trim().split(/\s+/);
+        $('brandName').textContent = parts.slice(0, -1).join(' ') || parts[0];
+      }
+      if (s.tagline) $('brandTag').textContent = s.tagline;
+      if (s.passwordMinLength) minLen = s.passwordMinLength;
+      $('pwHint').textContent = 'Use ' + minLen + '+ characters with upper, lower and a number. Avoid your username.';
+      if (s.defaults) {
+        $('bind').value = s.defaults.bind || '';
+        $('port').value = s.defaults.port || '';
+        $('tlsMode').value = s.defaults.tlsMode || 'off';
+        $('gwUrl').value = s.defaults.gatewayUrl || '';
+      }
+      if (s.needed === false) {
+        showBanner('Setup is already complete on this portal. Redirecting to the portal…', 'done');
+        setTimeout(() => { window.location.href = '/'; }, 1200);
+      }
+    })
+    .catch(() => { /* defaults are only cosmetic; the form still works */ });
+
+  $('submit').addEventListener('click', async () => {
+    const username = $('username').value.trim();
+    const password = $('password').value;
+    const passwordConfirm = $('passwordConfirm').value;
+    const displayName = $('displayName').value.trim();
+    const bind = $('bind').value.trim();
+    const port = $('port').value.trim();
+    const tlsMode = $('tlsMode').value;
+    const gwUrl = $('gwUrl').value.trim();
+
+    if (!username) return showBanner('Username is required.', 'error');
+    if (password.length < minLen) return showBanner('Password must be at least ' + minLen + ' characters.', 'error');
+    if (password !== passwordConfirm) return showBanner('Passwords do not match.', 'error');
+
+    const payload = { username, password, passwordConfirm, displayName, bind, port, tlsMode };
+    if (gwUrl) {
+      payload.gateway = { url: gwUrl, name: $('gwName').value.trim(), token: $('gwToken').value };
+    }
+
+    const btn = $('submit');
+    btn.disabled = true;
+    btn.textContent = 'Creating…';
+    banner.className = 'banner';
+    try {
+      const r = await fetch('/api/setup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        btn.disabled = false;
+        btn.textContent = 'Create admin & finish setup';
+        return showBanner(data.error || ('Setup failed (' + r.status + ')'), 'error');
+      }
+      $('wizard').style.display = 'none';
+      $('done').style.display = 'block';
+      let msg = 'Your admin account is ready. Redirecting to the portal…';
+      if (data.restartRequired) msg = 'Account created. Restart the portal to apply the new bind/port, then sign in.';
+      $('doneMsg').textContent = msg;
+      if (!data.restartRequired) setTimeout(() => { window.location.href = '/'; }, 1600);
+    } catch (e) {
+      btn.disabled = false;
+      btn.textContent = 'Create admin & finish setup';
+      showBanner('Could not reach the server: ' + e.message, 'error');
+    }
+  });
+
+  $('goNow').addEventListener('click', () => { window.location.href = '/'; });
+})();
+</script>
+</body>
+</html>

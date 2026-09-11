@@ -58,6 +58,9 @@ const DEFAULTS = {
   sessionTtlHours: 12,
   reconnectBaseMs: 1000,
   reconnectMaxMs: 30000,
+  // TLS intent recorded by the first-run wizard (actual termination lands in
+  // plan item 5). 'off' | 'auto' | 'manual'.
+  tlsMode: 'off',
 };
 
 // ── Credential safety ────────────────────────────────────────────────────────
@@ -122,6 +125,32 @@ function writeFirstRunCredentials(password) {
     console.error('[portal] could not write first-run credentials:', e.message);
     return null;
   }
+}
+
+// ── Password policy (plan item 4 groundwork) ────────────────────────────────
+// The first-run wizard must not accept a weak admin password. Item 6 grows
+// this into a full blocklist; this is the minimum that makes the wizard safe.
+const PASSWORD_MIN_LEN = 12;
+
+function passwordPolicyError(pw, username) {
+  const s = String(pw || '');
+  if (s.length < PASSWORD_MIN_LEN) return `password must be at least ${PASSWORD_MIN_LEN} characters`;
+  if (s.length > 200) return 'password is too long';
+  if (username && s.toLowerCase().includes(String(username).toLowerCase())) return 'password must not contain the username';
+  if (KNOWN_DEFAULT_PASSWORDS.some(d => s.toLowerCase() === String(d).toLowerCase())) return 'password is a known-default/weak password — choose something unique';
+  if (!/[a-z]/.test(s)) return 'password must include a lowercase letter';
+  if (!/[A-Z]/.test(s)) return 'password must include an uppercase letter';
+  if (!/[0-9]/.test(s)) return 'password must include a number';
+  return null;
+}
+
+// True when an operator/installer explicitly supplied the bootstrap admin
+// password (env or config). Headless installs use this so they never need a
+// browser wizard; a bare `node portal-server.js` does not.
+function hasExplicitBootstrapPassword() {
+  const p = process.env.PORTAL_ADMIN_PASSWORD || process.env.PORTAL_PASSWORD
+    || (SECRETS && SECRETS.portalPassword) || (CONFIG && CONFIG.portalPassword);
+  return !!(p && String(p).trim());
 }
 
 // Startup guard: never serve with a known-default credential.
@@ -320,6 +349,7 @@ function saveConfig() {
         // NOTE: no `token` here by design — see portal-secrets.json.
       })),
       sessionTtlHours: CONFIG.sessionTtlHours,
+      tlsMode: CONFIG.tlsMode || 'off',
     };
     if (fs.existsSync(CONFIG_PATH)) {
       try { fs.copyFileSync(CONFIG_PATH, CONFIG_PATH + '.bak'); } catch (e) { /* noop */ }
@@ -742,6 +772,29 @@ function startOrRestartGateway(g) {
 
 function gw(id) { return GATEWAY_BY_ID.get(id) || null; }
 
+// Shared gateway-object factory: validate + build (not register) a gateway from
+// a request body. Used by the admin API and the first-run wizard so both
+// enforce the same url/id rules. Returns { gateway } or { error, status }.
+function createGateway(body) {
+  if (!body || !body.url) return { error: 'url required' };
+  const url = String(body.url).trim();
+  if (!/^wss?:\/\//i.test(url)) return { error: 'url must start with ws:// or wss://' };
+  let id = String(body.id || '').trim().toLowerCase().replace(/[^a-z0-9._-]/gi, '_');
+  if (!id) id = url.replace(/^wss?:\/\//i, '').replace(/[^a-z0-9._-]/gi, '_').slice(0, 24) || 'gw';
+  if (GATEWAY_BY_ID.has(id) || CONFIG.gateways.some(g => g.id === id)) return { error: 'gateway id already exists: ' + id, status: 409 };
+  return {
+    gateway: {
+      id,
+      name: String(body.name || id).slice(0, 60),
+      url,
+      token: typeof body.token === 'string' ? body.token.trim() : '',
+      tokenSource: (typeof body.token === 'string' && body.token.trim()) ? 'runtime' : 'none',
+      origin: typeof body.origin === 'string' ? String(body.origin).trim() : '',
+      enabled: body.enabled !== false,
+    },
+  };
+}
+
 function gatewaysConnected() { return GATEWAYS.filter(g => g.connected); }
 
 // Resolve an agent ref ("gwId:agentId" or bare "agentId") to a connected
@@ -923,16 +976,28 @@ function handleApprovalResolved(kind, payload, client) {
 const ROLES = { student: 1, instructor: 2, admin: 3 };
 const USERNAME_RE = /^[a-z0-9][a-z0-9._-]{1,31}$/;
 
+// True once the portal decides a fresh box must be configured through the
+// browser wizard before any account can log in (plan item 4). No working
+// default exists while this is true.
+let SETUP_REQUIRED = false;
+
 function loadUsers() {
   let users = [];
   try {
     const raw = JSON.parse(fs.readFileSync(USERS_PATH, 'utf8'));
     if (Array.isArray(raw.users)) users = raw.users;
   } catch (e) { /* first run */ }
-  // First run: mint ONE admin. No shipped default — the password comes from
-  // PORTAL_ADMIN_PASSWORD / PORTAL_PASSWORD / portal-config.json, or a unique
-  // random one is generated and written to portal-first-run.txt (0600).
+  // First run with nothing configured. Two paths:
+  //   • an explicit bootstrap password was supplied (installer/headless) →
+  //     mint ONE admin with it, exactly as before; or
+  //   • nothing was supplied (bare `node portal-server.js`) → do NOT mint a
+  //     default admin. Enter SETUP mode and serve the first-run wizard, so no
+  //     working credential exists until the operator creates one (item 4).
   if (!users.some(u => u.role === 'admin')) {
+    if (!hasExplicitBootstrapPassword()) {
+      SETUP_REQUIRED = true;
+      return users;
+    }
     const boot = resolveBootstrapPassword();
     const salt = crypto.randomBytes(16).toString('hex');
     users.push({
@@ -988,6 +1053,108 @@ function publicUser(u) {
     role: u.role,
     agents: u.agents || [],
     createdAt: u.createdAt,
+  };
+}
+
+// ── First-run setup wizard (plan item 4) ────────────────────────────────────
+// On a fresh box with no accounts and no configured bootstrap password the
+// portal serves a browser wizard instead of minting a default admin. The
+// wizard creates the admin (strong password enforced), can move bind/port,
+// records the TLS intent, and can register the first gateway. Until it
+// completes, no account can authenticate and every other API is refused.
+
+// Public, unauthenticated view of the setup state.
+function setupStatus() {
+  return {
+    needed: SETUP_REQUIRED,
+    product: BRAND.product,
+    family: BRAND.family,
+    tagline: BRAND.tagline,
+    slug: BRAND.slug,
+    defaults: {
+      bind: CONFIG.bind,
+      port: CONFIG.port,
+      tlsMode: CONFIG.tlsMode || 'off',
+      gatewayUrl: CONFIG.gateways[0] ? CONFIG.gateways[0].url : DEFAULTS.gatewayUrl,
+    },
+    passwordMinLength: PASSWORD_MIN_LEN,
+  };
+}
+
+// Validate + apply the wizard payload, mint the first admin, and return a
+// session token. Returns { error } on any validation failure (nothing is
+// committed unless the whole payload validates).
+function completeSetup(body) {
+  if (!body || typeof body !== 'object') return { error: 'invalid request body' };
+
+  const username = String(body.username || 'admin').trim().toLowerCase();
+  if (!USERNAME_RE.test(username)) return { error: 'username must be 2-32 chars: lowercase letters, digits, dot, dash or underscore' };
+  if (USERS.some(u => u.username === username)) return { error: 'username already exists' };
+
+  const pwErr = passwordPolicyError(body.password, username);
+  if (pwErr) return { error: pwErr };
+  if (typeof body.passwordConfirm === 'string' && body.passwordConfirm !== String(body.password)) {
+    return { error: 'passwords do not match' };
+  }
+
+  // Validate bind/port up front so a bad value never half-applies.
+  let port = null;
+  if (body.port !== undefined && body.port !== null && String(body.port).trim() !== '') {
+    port = Number(body.port);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) return { error: 'port must be an integer between 1 and 65535' };
+  }
+  let bind = null;
+  if (typeof body.bind === 'string' && body.bind.trim()) {
+    bind = body.bind.trim();
+    if (!/^[a-zA-Z0-9.:_\-]+$/.test(bind) || bind.length > 64) return { error: 'bind must be a valid IP or hostname (e.g. 127.0.0.1 or 0.0.0.0)' };
+  }
+
+  const tlsMode = ['off', 'auto', 'manual'].includes(body.tlsMode) ? body.tlsMode : (CONFIG.tlsMode || 'off');
+
+  // Optional first gateway — validated before anything is committed.
+  let gateway = null;
+  if (body.gateway && (body.gateway.url || body.gateway.id)) {
+    const r = createGateway(body.gateway);
+    if (r.error) return { error: 'first gateway: ' + r.error };
+    gateway = r.gateway;
+  }
+
+  // ── Commit ──
+  const salt = crypto.randomBytes(16).toString('hex');
+  const admin = {
+    username,
+    displayName: String(body.displayName || 'Admin').trim().slice(0, 60) || 'Admin',
+    role: 'admin',
+    agents: ['*'],
+    assignments: [],
+    hash: hashPassword(String(body.password), salt),
+    salt,
+    createdAt: Date.now(),
+  };
+  USERS.push(admin);
+  saveUsers(USERS);
+
+  const prevPort = CONFIG.port;
+  const prevBind = CONFIG.bind;
+  if (port !== null) CONFIG.port = port;
+  if (bind !== null) CONFIG.bind = bind;
+  CONFIG.tlsMode = tlsMode;
+  if (gateway) { CONFIG.gateways.push(gateway); }
+  saveConfig();
+  if (gateway && gateway.enabled) startGateway(gateway);
+
+  SETUP_REQUIRED = false;
+  const tok = createSession(admin);
+  audit('setup_complete', admin.username, admin.role, {
+    bind: CONFIG.bind, port: CONFIG.port, tlsMode, gateway: gateway ? gateway.id : null,
+  });
+  return {
+    ok: true,
+    user: publicUser(admin),
+    session: tok,
+    // bind/port only take effect on the next start; be honest about it.
+    restartRequired: CONFIG.port !== prevPort || CONFIG.bind !== prevBind,
+    config: { bind: CONFIG.bind, port: CONFIG.port, tlsMode },
   };
 }
 
@@ -1734,7 +1901,13 @@ const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
 
   // Static UI
+  // First-run: until an admin exists, every page funnels to the setup wizard
+  // and the app shell is unreachable (plan item 4).
+  if (req.method === 'GET' && (url.pathname === '/setup' || url.pathname === '/setup.html')) {
+    return serveFile(path.join(DIR, 'setup.html'), 'text/html; charset=utf-8', res);
+  }
   if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
+    if (SETUP_REQUIRED) return redirect(res, '/setup');
     return serveFile(path.join(DIR, 'portal.html'), 'text/html; charset=utf-8', res);
   }
 
@@ -1767,6 +1940,11 @@ function serveFile(file, type, res) {
   });
 }
 
+function redirect(res, location) {
+  res.writeHead(302, { Location: location });
+  res.end();
+}
+
 function readBody(req) {
   return new Promise((resolve) => {
     let data = '';
@@ -1791,6 +1969,28 @@ function requireRole(user, role) {
 
 async function handleApi(req, res, url) {
   const p = url.pathname;
+
+  // ── First-run setup (plan item 4) — the ONLY live API until an admin exists ──
+  if (p === '/api/setup/status') {
+    return json(res, 200, setupStatus());
+  }
+  if (p === '/api/setup' && req.method === 'POST') {
+    if (!SETUP_REQUIRED) return json(res, 403, { error: 'setup already complete — use the admin API' });
+    const result = completeSetup(await readBody(req));
+    if (result.error) {
+      audit('setup_failed', null, 'anon', { error: result.error });
+      return json(res, 400, { error: result.error, setupRequired: true });
+    }
+    res.writeHead(200, {
+      'Content-Type': 'application/json',
+      'Set-Cookie': `portal_session=${result.session}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${CONFIG.sessionTtlHours * 3600}`,
+    });
+    return res.end(JSON.stringify({ ok: true, user: result.user, restartRequired: result.restartRequired, config: result.config }));
+  }
+  // While setup is pending, refuse everything else: no account can work yet.
+  if (SETUP_REQUIRED) {
+    return json(res, 503, { error: 'setup required', setupRequired: true, setupUrl: '/setup' });
+  }
 
   // ── Public ──
   if (p === '/api/me') {
@@ -2221,25 +2421,13 @@ async function handleApi(req, res, url) {
   if (p === '/api/gateways' && req.method === 'POST') {
     if (!requireRole(user, 'admin')) return json(res, 403, { error: 'admins only' });
     const body = await readBody(req);
-    if (!body || !body.url) return json(res, 400, { error: 'url required' });
-    const url = String(body.url).trim();
-    if (!/^wss?:\/\//i.test(url)) return json(res, 400, { error: 'url must start with ws:// or wss://' });
-    let id = String(body.id || '').trim().toLowerCase().replace(/[^a-z0-9._-]/gi, '_');
-    if (!id) id = url.replace(/^wss?:\/\//i, '').replace(/[^a-z0-9._-]/gi, '_').slice(0, 24) || 'gw';
-    if (GATEWAY_BY_ID.has(id) || CONFIG.gateways.some(g => g.id === id)) return json(res, 409, { error: 'gateway id already exists: ' + id });
-    const g = {
-      id,
-      name: String(body.name || id).slice(0, 60),
-      url,
-      token: typeof body.token === 'string' ? body.token.trim() : '',
-      tokenSource: typeof body.token === 'string' && body.token.trim() ? 'runtime' : 'none',
-      origin: typeof body.origin === 'string' ? String(body.origin).trim() : '',
-      enabled: body.enabled !== false,
-    };
+    const r = createGateway(body);
+    if (r.error) return json(res, r.status || 400, { error: r.error });
+    const g = r.gateway;
     CONFIG.gateways.push(g);
     saveConfig(); // writes the token to portal-secrets.json (0600), not the config
     if (g.enabled) startGateway(g);
-    audit('gateway_add', user.username, user.role, { id, name: g.name, url, enabled: g.enabled, hasToken: !!g.token });
+    audit('gateway_add', user.username, user.role, { id: g.id, name: g.name, url: g.url, enabled: g.enabled, hasToken: !!g.token });
     return json(res, 200, { ok: true, gateway: { id: g.id, name: g.name, url: g.url, enabled: g.enabled, hasToken: !!g.token, connected: false } });
   }
 
@@ -2494,6 +2682,11 @@ server.listen(CONFIG.port, CONFIG.bind, () => {
   }
   console.log(`   device:  ${DEVICE.deviceId.slice(0, 12)}…`);
   console.log(`   users:   ${USERS.length} account(s) — ${USERS.filter(u => u.role === 'admin').length} admin, ${USERS.filter(u => u.role === 'instructor').length} instructor, ${USERS.filter(u => u.role === 'student').length} student`);
+  if (SETUP_REQUIRED) {
+    console.log('   setup:   REQUIRED — no accounts yet. Open the wizard to create the first admin:');
+    console.log(`            http://${CONFIG.bind === '0.0.0.0' ? '<this-host>' : CONFIG.bind}:${CONFIG.port}/setup`);
+    console.log('            (all other routes are refused until setup completes — there is no default login)');
+  }
 });
 server.on('error', (e) => {
   console.error('[portal] http server error:', e.message);
