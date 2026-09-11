@@ -58,7 +58,7 @@
   where possible, pinned base-image digest, resource limits, and dropped caps
   (already partially done).
 
-- [ ] **9. Deployment model + tenancy decision.**
+- [x] **9. Deployment model + tenancy decision.** ✅ 2026-09-11
   Document the official public model: **single-tenant, self-hosted** (one org per
   install). Define supported platforms/requirements and explicitly-listed
   unsupported setups so expectations are set before people deploy.
@@ -265,3 +265,22 @@
   no read-only rootfs and its state files are root-owned — before the next `docker compose up -d --build`,
   the new image will run as uid 10001 and needs the state chown'd to `10001:10001` (`./install.sh install`
   now does this) or the server can't read its config/secrets. No live deploy this run.
+
+- **2026-09-11** — ✅ **Item 9 done.** Deployment model + tenancy decision documented in a new
+  **`DEPLOYMENT.md`**: Cirrus Portal is **single-tenant, self-hosted — one org per install**. The doc
+  states the decision (one account realm, one gateway fleet, one state store, one trust boundary; roles
+  are *not* tenant boundaries), the rationale (isolate by architecture — one install per org — rather than
+  promise multi-tenancy the code can't back), a **Tier-1 supported matrix** that mirrors the real
+  installer preflight (Debian 12/13 & Ubuntu 22.04/24.04 **amd64**, Docker Engine + **Compose v2**, Node
+  **22+**, **>500 MB** free disk, same-host loopback gateway `:18790`, current browsers), Tier-2
+  best-effort (other Debian-derivatives/arm64, non-Debian Linux), and an **explicitly-listed unsupported
+  table** (multi-tenant/SaaS, public cleartext, untrusted proxy without `trustProxy`, Windows/macOS
+  native, k8s/orchestrators, HA/clustering, shared state/secrets across installs, shared-login hosts) plus
+  scale-out guidance. New **`test-docs.js`** (5 checks: canonical name from `branding.json`, tenancy
+  decision, supported claims asserted against `install.sh` preflight regex/disk gate/port, unsupported
+  list, ships + README link). README header now links `DEPLOYMENT.md`; `release.sh` ships it. Evidence:
+  `node --check` (test-docs) + `bash -n` (release/install) clean; **`test-docs.js` 5/5**; `./release.sh`
+  built `dist/agent-portal-2.2.0.tar.gz` (now contains `DEPLOYMENT.md`); `./secret-scan.sh` clean on the
+  repo **and** the built tarball (`--tar`). Commit `485beee`.
+  **Note:** docs-only item — no code/runtime change, no live deploy, nothing to do in a quiet window. The
+  item-10 installer rename and item-12 public docs set will build on this model.
