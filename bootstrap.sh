@@ -24,7 +24,7 @@ cd "$DIR"
 
 # ── defaults ────────────────────────────────────────────────────────────────
 PORT="${PORT:-18800}"
-BIND="${BIND:-0.0.0.0}"
+BIND="${BIND:-127.0.0.1}"   # safe default (plan item 7): loopback only
 GATEWAY_URL="${GATEWAY_URL:-ws://127.0.0.1:18790}"
 SESSION_TTL_HOURS="${SESSION_TTL_HOURS:-12}"
 CONFIG_FILE="portal-config.json"
@@ -33,6 +33,7 @@ FORCE_CONFIG=0
 FRESH=0
 APPROVE=0
 VERIFY=0
+DO_FIREWALL=0
 
 usage() {
   cat <<'EOF'
@@ -53,6 +54,7 @@ Options:
                    server's portal-device.json.
   --verify         Health-check an existing install (container, gateway
                    reachability, HTTP response).
+  --firewall       Open the portal port in ufw (when ufw is active).
   -h, --help       Show this help.
 
 Env (for non-interactive installs):
@@ -64,9 +66,16 @@ Env (for non-interactive installs):
                      no shipped default login.
   PORT / BIND / GATEWAY_URL / SESSION_TTL_HOURS  (optional overrides)
 
+  Safe defaults (plan item 7): the portal binds 127.0.0.1 (loopback) so a
+  fresh install is never exposed by accident. To expose a non-loopback
+  interface, set BIND explicitly (e.g. BIND=0.0.0.0) — the server then also
+  requires PORTAL_PUBLIC_BIND=1 and refuses cleartext unless you add TLS or
+  --insecure-plaintext.
+
 Examples:
   GATEWAY_TOKEN=abc123 ./bootstrap.sh
   GATEWAY_TOKEN=abc123 PORTAL_PASSWORD='hunter2!' ./bootstrap.sh --fresh
+  GATEWAY_TOKEN=abc123 ./bootstrap.sh --firewall
   ./bootstrap.sh --approve
   ./bootstrap.sh --verify
 EOF
@@ -78,6 +87,7 @@ for arg in "$@"; do
     --force-config) FORCE_CONFIG=1 ;;
     --approve) APPROVE=1 ;;
     --verify) VERIFY=1 ;;
+    --firewall) DO_FIREWALL=1 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $arg" >&2; usage; exit 1 ;;
   esac
@@ -92,6 +102,29 @@ gen_password() {
   if command -v openssl >/dev/null 2>&1; then openssl rand -base64 24 | tr -d '/+=' | head -c 24
   elif [ -r /dev/urandom ]; then head -c 32 /dev/urandom | base64 | tr -d '/+=' | head -c 24
   else echo "CHANGE-ME-$(date +%s)"; fi
+}
+
+# is_loopback_bind ADDR → 0 when the address is host-local only (plan item 7).
+is_loopback_bind() {
+  case "$(printf '%s' "${1:-}" | tr -d '[]' | tr 'A-Z' 'a-z')" in
+    127.*|::1|localhost) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# open_firewall — best-effort ufw helper. Only acts when ufw is active; never
+# fails the install over a missing/blocked firewall (plan item 7).
+open_firewall() {
+  local port="$PORT"
+  if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
+    if sudo ufw allow "$port/tcp" >/dev/null 2>&1; then
+      log "ufw: allowed $port/tcp"
+    else
+      warn "ufw rule failed — add manually: sudo ufw allow $port/tcp"
+    fi
+  else
+    warn "--firewall given but ufw is not active/installed — add the rule manually: sudo ufw allow $port/tcp"
+  fi
 }
 
 # ── mode: --approve ─────────────────────────────────────────────────────────
@@ -198,6 +231,7 @@ if [ ! -f "$CONFIG_FILE" ] || [ "$FORCE_CONFIG" = "1" ]; then
 {
   "port": $PORT,
   "bind": "$BIND",
+  "publicBind": $([ is_loopback_bind "$BIND" ] && echo false || echo true),
   "gatewayUrl": "$GATEWAY_URL",
   "sessionTtlHours": $SESSION_TTL_HOURS
 }
@@ -253,6 +287,11 @@ else
 fi
 
 # ── build + start ───────────────────────────────────────────────────────────
+if ! is_loopback_bind "$BIND"; then
+  warn "public bind requested: BIND=$BIND — this exposes the portal off-host."
+  warn "  the server will also refuse cleartext: add TLS (--domain/--tls-cert) or PORTAL_INSECURE_PLAINTEXT=1 (LAN/tunnel only)."
+fi
+if [ "$DO_FIREWALL" = "1" ]; then open_firewall; fi
 log "building and starting the portal container…"
 docker compose up -d --build
 

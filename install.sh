@@ -132,11 +132,19 @@ $C_CYN Options:$C_RST
   -h, --help        Show this help.
 
 $C_CYN TLS / exposure:$C_RST
-  Default bind is 127.0.0.1 (loopback). A public bind requires TLS unless you
-  pass --insecure-plaintext. Three ways to go public safely:
+  Default bind is 127.0.0.1 (loopback). Exposing a non-loopback interface
+  requires an explicit opt-in: `--insecure-plaintext` (cleartext, LAN/tunnel
+  only) or a TLS path. A public bind requires TLS unless --insecure-plaintext.
+  Three ways to go public safely:
     ./install.sh install --domain portal.example.com --email you@example.com
     ./install.sh install --tls-cert /path/fullchain.pem --tls-key /path/privkey.pem
     (or front it with your own TLS-terminating proxy + trustProxy:true)
+
+$C_CYN Firewall (ufw):$C_RST
+  --firewall opens the right port(s) when ufw is active: 80,443/tcp for
+  --domain, else the portal port. Manual equivalent:
+    sudo ufw allow 80,443/tcp     # with --domain (HTTPS)
+    sudo ufw allow 18800/tcp      # direct / loopback-tunnelled installs
 
 $C_CYN Env:$C_RST
   GATEWAY_TOKEN      This server's OpenClaw gateway token. Auto-detected
@@ -726,6 +734,7 @@ run_install() {
 {
   "port": $PORT,
   "bind": "$BIND",
+  "publicBind": $([ is_loopback_bind "$BIND" ] && echo false || echo true),
   "gateways": [
     {
       "id": "$GATEWAY_ID",
@@ -762,6 +771,7 @@ EOF
     # --force-config (plan item 5).
     if [ -n "$DOMAIN" ] || [ -n "$TLS_CERT" ] || [ "$INSECURE_PLAINTEXT" = "1" ]; then
       config_patch "bind=$BIND" "tlsMode=$tls_mode" "trustProxy=$trust_proxy" \
+        "publicBind=$([ is_loopback_bind "$BIND" ] && echo false || echo true)" \
         "tlsCert=$TLS_CERT" "tlsKey=$TLS_KEY" \
         "insecurePlaintext=$([ "$INSECURE_PLAINTEXT" = "1" ] && echo true || echo '')"
       ok "updated $CONFIG_FILE: tlsMode=$tls_mode, bind=$BIND${DOMAIN:+ (https://$DOMAIN)}"

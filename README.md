@@ -49,6 +49,9 @@ will even do itself when `openclaw` is on PATH):
 - **TLS by default**: binds `127.0.0.1` and **refuses a public bind without
   TLS**. `--domain` sets up automatic HTTPS (Caddy); see “TLS & public
   exposure” below.
+- **Safe network defaults**: `bind` defaults to `127.0.0.1` (loopback); a
+  non-loopback bind requires an explicit opt-in (`publicBind:true`,
+  `PORTAL_PUBLIC_BIND=1`, or `--public-bind`) and still refuses cleartext.
 - **Optional firewall rule** (`--firewall`, ufw) and **device approval**
   (`--approve` is the default; `--no-approve` to skip).
 - **Idempotent**: re-running `install` on a healthy box changes nothing.
@@ -98,6 +101,15 @@ When TLS is in play — direct or via a trusted proxy — session cookies become
 Cleartext on a public interface is refused at boot. The only override is the
 explicit, loudly-warned `--insecure-plaintext` / `PORTAL_INSECURE_PLAINTEXT=1`
 (a trusted LAN or a tunnel — never the open internet).
+
+**Exposing a non-loopback interface is deliberate, not accidental.** The bind
+address still defaults to `127.0.0.1`; to serve off-host you must opt in via
+`"publicBind": true` in `portal-config.json` (the installer writes this for
+you), `PORTAL_PUBLIC_BIND=1`, or `--public-bind`, *and* satisfy the TLS rule
+above. A wildcard bind (`0.0.0.0`) additionally warns loudly at boot because
+it listens on **every** interface. Firewall: `--firewall` opens the right port
+when ufw is active (`sudo ufw allow 80,443/tcp` with `--domain`, else the
+portal port); loopback-only installs need no rule (tunnel in over SSH).
 
 Shipped proxy templates live in `deploy/`: `deploy/Caddyfile` (automatic
 certs) and `deploy/nginx/cirrus-portal.conf` — both do HSTS, an 80→443

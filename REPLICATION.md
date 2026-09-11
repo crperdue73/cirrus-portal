@@ -118,6 +118,13 @@ ssh user@new-server 'cd /tmp && tar xzf agent-portal-2.1.0.tar.gz \
 > proxy at the loopback port and set `trustProxy:true`. Cleartext public access
 > needs the explicit `--insecure-plaintext` (trusted LAN/tunnel only).
 > Templates: `deploy/Caddyfile`, `deploy/nginx/cirrus-portal.conf`.
+>
+> **Safe network defaults (Sep 2026):** `bind` defaults to `127.0.0.1`. A
+> non-loopback bind is a deliberate opt-in — set `"publicBind": true` in
+> `portal-config.json` (the installer writes it), or `PORTAL_PUBLIC_BIND=1` /
+> `--public-bind` — and it still refuses cleartext without TLS. A wildcard bind
+> (`0.0.0.0`) warns loudly at boot. Open the firewall with `--firewall`
+> (`sudo ufw allow 80,443/tcp` for `--domain`, else the portal port).
 
 That's it. From a cold server to a working portal in ~2 minutes, and the whole
 flow is repeatable per machine. To approve the device, `install.sh install`

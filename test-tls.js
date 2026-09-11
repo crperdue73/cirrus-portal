@@ -108,7 +108,7 @@ function makeSelfSigned(dir) {
   // ── B. public bind, TLS off, no override → REFUSED ─────────────────────────
   {
     const d = tmp();
-    writeConfig(d, { port: 19560 + Math.floor(Math.random() * 30), bind: '0.0.0.0', gateways: [], portalPassword: 'Zx9-unique-Pass-42', sessionTtlHours: 12, tlsMode: 'off' });
+    writeConfig(d, { port: 19560 + Math.floor(Math.random() * 30), bind: '0.0.0.0', publicBind: true, gateways: [], portalPassword: 'Zx9-unique-Pass-42', sessionTtlHours: 12, tlsMode: 'off' });
     const s = await spawnServer(d, {}, () => false, 6000); // wait for the process to exit
     assert(s.code !== null, 'B: server should have exited, not stayed up');
     assert(s.code === 1, `B: refusal should exit 1 (got ${s.code})`);
@@ -120,7 +120,7 @@ function makeSelfSigned(dir) {
   // ── C. explicit override boots, loudly ─────────────────────────────────────
   {
     const d = tmp();
-    writeConfig(d, { port: 19590 + Math.floor(Math.random() * 25), bind: '0.0.0.0', gateways: [], portalPassword: 'Zx9-unique-Pass-42', sessionTtlHours: 12, tlsMode: 'off' });
+    writeConfig(d, { port: 19590 + Math.floor(Math.random() * 25), bind: '0.0.0.0', publicBind: true, gateways: [], portalPassword: 'Zx9-unique-Pass-42', sessionTtlHours: 12, tlsMode: 'off' });
     const s = await spawnServer(d, { PORTAL_INSECURE_PLAINTEXT: '1' }, (out) => out.includes('users:'));
     assert(s.code === null, `C: override should boot (code ${s.code})\nstderr=${s.err}`);
     assert(/INSECURE-PLAINTEXT/.test(s.err), 'C: expected a loud insecure warning');
@@ -134,7 +134,7 @@ function makeSelfSigned(dir) {
   {
     const d = tmp();
     const port = 19620 + Math.floor(Math.random() * 25);
-    writeConfig(d, { port, bind: '0.0.0.0', gateways: [], portalPassword: 'Zx9-unique-Pass-42', sessionTtlHours: 12, tlsMode: 'auto' });
+    writeConfig(d, { port, bind: '0.0.0.0', publicBind: true, gateways: [], portalPassword: 'Zx9-unique-Pass-42', sessionTtlHours: 12, tlsMode: 'auto' });
     const s = await spawnServer(d, {}, (out) => out.includes('users:'));
     assert(s.code === null, `D: trust-proxy box should boot (code ${s.code})\nstderr=${s.err}`);
     assert(s.out.includes('terminated by a reverse proxy'), `D: expected proxy tls banner\nstdout=${s.out}`);

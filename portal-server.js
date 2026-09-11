@@ -52,7 +52,11 @@ const BRAND = (() => {
 
 const DEFAULTS = {
   port: 18800,
-  bind: '0.0.0.0',
+  // Safe default (plan item 7): loopback only. A bare `node portal-server.js`
+  // is never reachable off-host; exposing it needs an explicit opt-in (see
+  // assertNetworkPolicy / `PORTAL_PUBLIC_BIND=1` / `--public-bind`).
+  bind: '127.0.0.1',
+  publicBind: false,       // explicit opt-in to bind a non-loopback interface
   gatewayUrl: 'ws://127.0.0.1:18790',
   gatewayToken: '',
   portalPassword: '',
@@ -231,6 +235,7 @@ function loadConfig() {
   // Boolean flags (env presence overrides the file).
   if (process.env.PORTAL_TRUST_PROXY !== undefined) cfg.trustProxy = truthyEnv(process.env.PORTAL_TRUST_PROXY);
   if (process.env.PORTAL_INSECURE_PLAINTEXT !== undefined) cfg.insecurePlaintext = truthyEnv(process.env.PORTAL_INSECURE_PLAINTEXT);
+  if (process.env.PORTAL_PUBLIC_BIND !== undefined) cfg.publicBind = truthyEnv(process.env.PORTAL_PUBLIC_BIND);
   return cfg;
 }
 
@@ -247,6 +252,43 @@ const CONFIG = loadConfig();
 const LOOPBACK_RE = /^(127(\.\d+){3}|::1|localhost)$/i;
 function isLoopbackBind(b) {
   return LOOPBACK_RE.test(String(b || '').trim().replace(/^\[|\]$/g, ''));
+}
+
+// ── Safe network defaults (plan item 7) ──────────────────────────────────────
+// The portal binds loopback unless the operator deliberately opts in to a
+// non-loopback interface. A wildcard bind (0.0.0.0 / ::) listens on EVERY
+// interface, so it must never be a silent default: it requires an explicit
+// flag — `PORTAL_PUBLIC_BIND=1` or `--public-bind` (or `"publicBind": true`
+// in portal-config.json). When opted in, we still shout about it at boot, and
+// the TLS gate (assertTlsPolicy) independently refuses cleartext.
+const WILDCARD_RE = /^(0\.0\.0\.0|::|::0|\[::\]|\*|0\.0\.0\.0\/0)$/i;
+function isWildcardBind(b) {
+  return WILDCARD_RE.test(String(b || '').trim());
+}
+// True when the operator explicitly asked to expose a non-loopback interface.
+function publicBindRequested() {
+  return CONFIG.publicBind === true
+    || truthyEnv(process.env.PORTAL_PUBLIC_BIND)
+    || process.argv.includes('--public-bind');
+}
+function assertNetworkPolicy() {
+  const b = String(CONFIG.bind || '').trim();
+  if (isLoopbackBind(b)) return;                  // loopback — always fine
+  if (!publicBindRequested()) {
+    console.error(`[portal] FATAL: refusing to bind non-loopback interface "${CONFIG.bind}" without an explicit opt-in.`);
+    console.error('[portal] The portal defaults to 127.0.0.1 so a fresh install is never exposed by accident.');
+    console.error('[portal] To expose it deliberately, choose one:');
+    console.error('[portal]   • behind TLS (recommended):  ./install.sh install --domain portal.example.com   (Caddy; portal stays on loopback)');
+    console.error('[portal]   • explicit public bind:       PORTAL_PUBLIC_BIND=1 (or --public-bind), plus TLS or --insecure-plaintext');
+    console.error('[portal]   • keep it local:              bind 127.0.0.1   (the default)');
+    console.error('[portal] A wildcard bind (0.0.0.0) would listen on EVERY interface — never do it by accident.');
+    process.exit(1);
+  }
+  if (isWildcardBind(b)) {
+    console.warn(`[portal] ⚠ PUBLIC BIND: ${CONFIG.bind} listens on ALL interfaces — every host that can reach this machine can reach the portal.`);
+  } else {
+    console.warn(`[portal] ⚠ PUBLIC BIND: ${CONFIG.bind} is a non-loopback interface.`);
+  }
 }
 function readPem(p) { try { return p ? fs.readFileSync(p) : null; } catch { return null; } }
 
@@ -2948,13 +2990,21 @@ async function handleApi(req, res, url) {
 }
 
 // ── Main ────────────────────────────────────────────────────────────────────
-// Refuses to bind a public interface in cleartext unless explicitly allowed.
+// Safe network defaults first: loopback unless explicitly opted out of.
+assertNetworkPolicy();
+// Then the TLS gate: refuses to bind a public interface in cleartext unless
+// explicitly allowed.
 assertTlsPolicy();
 const SCHEME = SERVING_TLS ? 'https' : 'http';
 server.listen(CONFIG.port, CONFIG.bind, () => {
   console.log(`🟠 ${BRAND.product} — ${BRAND.tagline}`);
   console.log(`   ${BRAND.family} · engine: ${BRAND.engine} · ${BRAND.slug}`);
-  console.log(`   ${SCHEME}://${CONFIG.bind}:${CONFIG.port}  (LAN: ${SCHEME}://<this-host>:${CONFIG.port})`);
+  console.log(`   listen:  ${SCHEME}://${CONFIG.bind}:${CONFIG.port}${isWildcardBind(CONFIG.bind) ? '  (all interfaces)' : ''}`);
+  if (isLoopbackBind(CONFIG.bind)) {
+    console.log('   net:     loopback only — not reachable off-host (use --domain, or PORTAL_PUBLIC_BIND=1 + TLS, to expose)');
+  } else {
+    console.log('   net:     ⚠ PUBLIC — reachable off-host; add a firewall rule (ufw allow 80,443/tcp) and keep TLS on');
+  }
   if (SERVING_TLS) {
     console.log(`   tls:     ON (served directly) — cert ${CONFIG.tlsCert}`);
   } else if (TRUST_PROXY) {
@@ -2975,7 +3025,7 @@ server.listen(CONFIG.port, CONFIG.bind, () => {
   console.log(`   users:   ${USERS.length} account(s) — ${USERS.filter(u => u.role === 'admin').length} admin, ${USERS.filter(u => u.role === 'instructor').length} instructor, ${USERS.filter(u => u.role === 'student').length} student`);
   if (SETUP_REQUIRED) {
     console.log('   setup:   REQUIRED — no accounts yet. Open the wizard to create the first admin:');
-    console.log(`            ${SCHEME}://${CONFIG.bind === '0.0.0.0' ? '<this-host>' : CONFIG.bind}:${CONFIG.port}/setup`);
+    console.log(`            ${SCHEME}://${isLoopbackBind(CONFIG.bind) || isWildcardBind(CONFIG.bind) ? '<this-host>' : CONFIG.bind}:${CONFIG.port}/setup`);
     console.log('            (all other routes are refused until setup completes — there is no default login)');
   }
   console.log('   ready.');

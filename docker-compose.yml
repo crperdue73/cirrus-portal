@@ -30,7 +30,8 @@ services:
     #   GATEWAY_URL / GATEWAY_TOKEN / PORTAL_PASSWORD / SESSION_TTL_HOURS
     #   RECONNECT_BASE_MS / RECONNECT_MAX_MS
     #   PORTAL_TLS_MODE / PORTAL_TLS_CERT / PORTAL_TLS_KEY / PORTAL_TRUST_PROXY
-    #   PORTAL_INSECURE_PLAINTEXT=1  (allow a cleartext PUBLIC bind — LAN/tunnel only)
+    #   PORTAL_PUBLIC_BIND=1        (opt in to a non-loopback bind — default is loopback)
+    #   PORTAL_INSECURE_PLAINTEXT=1 (allow a cleartext PUBLIC bind — LAN/tunnel only)
     security_opt:
       - no-new-privileges:true
     cap_drop:
