@@ -1,9 +1,16 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════════════
-#  Cirrus Portal — professional installer v2
+#  Cirrus Portal — professional installer v3
 #  ───────────────────────────────────────────────────────────────────────────
 #  One command to stand up a polished, hardened Cirrus Portal instance on any
 #  Debian/Ubuntu-class server that already runs an OpenClaw gateway.
+#
+#  v3 (public release) adds: --domain / --tls / --public / --non-interactive;
+#  extended preflight (DNS, TLS:443 reachability, firewall, port); 
+#  rollback-on-failure (a pre-install snapshot is restored if install aborts);
+#  and a --dry-run that prints the EXACT plan without needing Docker.
+#  Container / package slug is now `cirrus-portal` (legacy `agent-portal`
+#  containers are still detected so status/doctor keep working on old boxes).
 #
 #    ./install.sh install             # detect → configure → build → run
 #    ./install.sh status              # health check (scriptable)
@@ -25,7 +32,7 @@
 #    • Idempotent: re-running install on a healthy box changes nothing
 #      except (optionally) rebuilding the image.
 # ═══════════════════════════════════════════════════════════════════════════
-set -euo pipefail
+set -Eeuo pipefail
 
 # ── identity (single source of truth: branding.json / VERSION) ─────────────
 VERSION="$(cat VERSION 2>/dev/null | tr -d '[:space:]')"
@@ -48,7 +55,8 @@ AUDIT_FILE="portal-audit.log"
 LOG_FILE="install.log"
 CRED_FILE="portal-credentials.txt"
 STATE_FILES=("$DEVICE_FILE" "$USERS_FILE" "$CONTEXT_FILE" "$ROOMS_FILE" "$AUDIT_FILE")
-CONTAINER_NAME="agent-portal"
+CONTAINER_NAME="${PORTAL_CONTAINER_NAME:-cirrus-portal}"
+LEGACY_CONTAINER_NAME="agent-portal"
 # Container runtime uid:gid — MUST match the Dockerfile's ARG PORTAL_UID/GID
 # (plan item 8). Host bind-mounts are shared with the container, so the state
 # files must be owned by this id or the non-root server can't read/write them.
@@ -74,6 +82,8 @@ ACME_EMAIL=""
 TLS_CERT=""
 TLS_KEY=""
 INSECURE_PLAINTEXT=0
+WANT_TLS=0
+PUBLIC_BIND=0
 
 CMD=""
 FRESH=0
@@ -81,8 +91,14 @@ FORCE_CONFIG=0
 DO_APPROVE=1
 DO_FIREWALL=0
 YES=0
+NONINTERACTIVE=0
 DRY_RUN=0
 PURGE=0
+
+# ── install rollback state (plan item 10) ───────────────────────────────────
+ROLLBACK_DIR=""
+ROLLBACK_ARMED=0
+HAD_CONTAINER_BEFORE=0
 
 # ── colors / logging ────────────────────────────────────────────────────────
 if [ -t 1 ]; then
@@ -132,13 +148,20 @@ $C_CYN Options:$C_RST
   --no-approve      Skip the device-approval step on the gateway.
   --firewall        Open the portal port in ufw (80/443 when --domain is used).
   --purge           With uninstall: also delete config, state, credentials.
-  --dry-run         Print what install would do, change nothing.
+  --dry-run         Print the exact install plan and change nothing. Needs
+                    no Docker — safe to run anywhere, any time.
+  --tls             Require TLS. Pair with --domain (automatic) or
+                    --tls-cert/--tls-key (bring your own certificate).
+  --public          Bind on all interfaces (0.0.0.0) instead of loopback.
+                    Still requires TLS — or --insecure-plaintext for a
+                    trusted LAN/tunnel only.
+  --non-interactive Never prompt; assume yes (alias: -y / --yes).
   -y, --yes         Assume yes for all prompts.
   -h, --help        Show this help.
 
 $C_CYN TLS / exposure:$C_RST
   Default bind is 127.0.0.1 (loopback). Exposing a non-loopback interface
-  requires an explicit opt-in: `--insecure-plaintext` (cleartext, LAN/tunnel
+  requires an explicit opt-in: '--insecure-plaintext' (cleartext, LAN/tunnel
   only) or a TLS path. A public bind requires TLS unless --insecure-plaintext.
   Three ways to go public safely:
     ./install.sh install --domain portal.example.com --email you@example.com
@@ -150,6 +173,15 @@ $C_CYN Firewall (ufw):$C_RST
   --domain, else the portal port. Manual equivalent:
     sudo ufw allow 80,443/tcp     # with --domain (HTTPS)
     sudo ufw allow 18800/tcp      # direct / loopback-tunnelled installs
+
+$C_CYN Preflight & rollback (v3):$C_RST
+  Before touching any state, install runs a preflight: host OS, >500 MB disk,
+  the portal port, DNS for --domain, TLS:443 reachability, and a firewall
+  report. If any step fails, install restores the exact pre-install
+  config/state from a snapshot taken up front (rollback-on-failure).
+  See the plan without doing anything (no Docker required):
+    ./install.sh install --dry-run --domain portal.example.com
+  Offline/CI boxes can skip the DNS probe with PORTAL_SKIP_DNS_CHECK=1.
 
 $C_CYN Env:$C_RST
   GATEWAY_TOKEN      This server's OpenClaw gateway token. Auto-detected
@@ -199,6 +231,15 @@ detect_docker() {
 
 docker_ps()  { "${SUDO_CMD[@]}" docker ps --filter "name=$CONTAINER_NAME" "$@"; }
 compose()    { "${SUDO_CMD[@]}" docker compose "$@"; }
+
+# Name of the running portal container, new OR legacy (plan item 10 rename).
+# Uses an unfiltered ps so we still see an old `agent-portal` container on a
+# box that has not been migrated to `cirrus-portal` yet.
+container_name_running() {
+  "${SUDO_CMD[@]}" docker ps --format '{{.Names}}' 2>/dev/null \
+    | grep -Ex "$CONTAINER_NAME|$LEGACY_CONTAINER_NAME" | head -1
+}
+container_running() { [ -n "$(container_name_running)" ]; }
 
 # Run a command as root: directly when we already are, else via the detected
 # sudo. Returns 127 when neither is available.
@@ -288,6 +329,9 @@ while [ "$_i" -lt "${#ARGS[@]}" ]; do
     --firewall) DO_FIREWALL=1 ;;
     --purge) PURGE=1 ;;
     --dry-run) DRY_RUN=1 ;;
+    --tls) WANT_TLS=1 ;;
+    --public) PUBLIC_BIND=1 ;;
+    --non-interactive|--no-input|--batch) NONINTERACTIVE=1; YES=1 ;;
     --insecure-plaintext) INSECURE_PLAINTEXT=1 ;;
     --domain) _i=$((_i+1)); DOMAIN="${ARGS[$_i]:-}"; [ -n "$DOMAIN" ] || die "--domain needs a hostname (e.g. --domain portal.example.com)" ;;
     --email) _i=$((_i+1)); ACME_EMAIL="${ARGS[$_i]:-}" ;;
@@ -328,8 +372,8 @@ run_status() {
 
   log "── $APP_NAME status ─────────────────────────────"
   # container
-  if docker_ps --format '{{.Names}} {{.Status}}' | grep -q "$CONTAINER_NAME"; then
-    ok "container $CONTAINER_NAME is up ($(docker_ps --format '{{.Status}}' | head -1))"
+  if container_running; then
+    ok "container $(container_name_running) is up ($(docker_ps --format '{{.Status}}' | head -1))"
   else
     warn "container $CONTAINER_NAME is NOT running"; fails=$((fails+1))
   fi
@@ -446,7 +490,7 @@ run_doctor() {
     fi
   }
   # container + logs
-  if docker_ps --format '{{.Names}}' | grep -q "$CONTAINER_NAME"; then
+  if container_running; then
     ok "container running"
     local crash
     crash="$(compose logs --tail 300 2>/dev/null | grep -E 'uncaught|FATAL|EADDRINUSE|TypeError|ReferenceError|Cannot find module|throw new' || true)"
@@ -521,9 +565,9 @@ run_restore() {
 # ═══════════════════════════════════════════════════════════════════════════
 run_uninstall() {
   detect_docker
-  if docker_ps --format '{{.Names}}' | grep -q "$CONTAINER_NAME"; then
+  if container_running; then
     [ "$YES" = "1" ] || {
-      read -r -p "Stop and remove the $CONTAINER_NAME container? (state files kept) [y/N] " ans
+      read -r -p "Stop and remove the $(container_name_running) container? (state files kept) [y/N] " ans
       case "$ans" in y|Y) ;; *) die "aborted." ;; esac
     }
     compose down --remove-orphans
@@ -596,6 +640,90 @@ verify_admin_login() {
   rm -f "$jar"; return "$rc"
 }
 
+# ── extended preflight (plan item 10) ───────────────────────────────────────
+# DNS lookup for --domain. PORTAL_SKIP_DNS_CHECK=1 bypasses the probe
+# (CI / offline dry-runs).
+preflight_dns() { # preflight_dns HOST
+  local host="$1"
+  [ "${PORTAL_SKIP_DNS_CHECK:-0}" = "1" ] && return 0
+  if have getent; then
+    getent ahosts "$host" >/dev/null 2>&1 && return 0
+    getent hosts  "$host" >/dev/null 2>&1 && return 0
+  fi
+  have dig  && [ -n "$(dig +short A "$host" 2>/dev/null)" ] && return 0
+  have host && host "$host" >/dev/null 2>&1 && return 0
+  have nslookup && nslookup "$host" >/dev/null 2>&1 && return 0
+  return 1
+}
+
+# Is TCP PORT (default 443) open on HOST? ACME needs inbound 80/443 to reach Caddy.
+preflight_tls_reachable() { # preflight_tls_reachable HOST [PORT]
+  timeout 3 bash -c "</dev/tcp/$1/${2:-443}" 2>/dev/null
+}
+
+# Report the firewall posture so the operator knows what to open.
+preflight_firewall() {
+  if have ufw; then
+    if ufw status 2>/dev/null | grep -q "Status: active"; then echo "ufw active"
+    else echo "ufw installed, inactive"; fi
+  elif have firewall-cmd; then echo "firewalld present"
+  elif have iptables; then echo "iptables (no ufw)"
+  else echo "unknown"; fi
+}
+
+# ── rollback-on-failure (plan item 10) ──────────────────────────────────────
+# Snapshot config/secrets/state before mutating anything; restore on any error.
+snapshot_state() {
+  ROLLBACK_DIR="$(mktemp -d 2>/dev/null || echo "")"
+  if [ -z "$ROLLBACK_DIR" ]; then
+    warn "could not create a rollback dir — continuing WITHOUT rollback protection"
+    return 0
+  fi
+  : > "$ROLLBACK_DIR/.present"; : > "$ROLLBACK_DIR/.absent"
+  local f
+  for f in "$CONFIG_FILE" "$SECRETS_FILE" "$CRED_FILE" "${STATE_FILES[@]}"; do
+    if [ -e "$f" ]; then
+      cp -p "$f" "$ROLLBACK_DIR/$(basename "$f")" 2>/dev/null || true
+      printf '%s\n' "$f" >> "$ROLLBACK_DIR/.present"
+    else
+      printf '%s\n' "$f" >> "$ROLLBACK_DIR/.absent"
+    fi
+  done
+  ROLLBACK_ARMED=1
+  info "rollback snapshot saved (restored automatically if install fails)"
+}
+
+rollback_now() {
+  [ "$ROLLBACK_ARMED" = "1" ] || return 0
+  set +e
+  warn "install failed — restoring the pre-install state…"
+  local f
+  while IFS= read -r f; do
+    [ -n "$f" ] && [ -e "$ROLLBACK_DIR/$(basename "$f")" ] && cp -p "$ROLLBACK_DIR/$(basename "$f")" "$f" 2>/dev/null
+  done < "$ROLLBACK_DIR/.present"
+  while IFS= read -r f; do
+    [ -n "$f" ] && rm -f "$f" 2>/dev/null
+  done < "$ROLLBACK_DIR/.absent"
+  # A fresh box that we just built gets torn down so nothing half-configured
+  # is left listening. An existing container is left running.
+  if [ "$HAD_CONTAINER_BEFORE" = "0" ]; then
+    "${SUDO_CMD[@]}" docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1
+  fi
+  ROLLBACK_ARMED=0
+  ok "pre-install state restored."
+}
+
+rollback_done() {
+  [ -n "$ROLLBACK_DIR" ] && rm -rf "$ROLLBACK_DIR" 2>/dev/null
+  ROLLBACK_DIR=""; ROLLBACK_ARMED=0
+}
+
+on_install_error() {
+  local rc="${1:-1}"
+  rollback_now
+  die "install aborted (exit $rc) — rollback complete, nothing left half-applied."
+}
+
 # ── Caddy reverse proxy (plan item 5) ───────────────────────────────────────
 # Wires automatic Let's Encrypt HTTPS in front of the loopback portal. Writes a
 # Caddyfile next to the installer and starts it as a systemd service when we can.
@@ -663,11 +791,10 @@ EOF
 }
 
 run_install() {
-  detect_docker
-
-  # ── TLS / exposure policy (plan item 5) ─────────────────────────────────
-  # Decide how the portal is exposed before we touch anything. A public bind
-  # without TLS is refused unless --insecure-plaintext is explicitly given.
+  # ── TLS / exposure policy (plan items 5 + 10) ───────────────────────────
+  # Decide how the portal is exposed before we touch anything (no Docker
+  # needed for this decision). A public bind without TLS is refused unless
+  # --insecure-plaintext is explicitly given.
   local tls_mode="off" trust_proxy="false"
   if [ -n "$DOMAIN" ]; then
     tls_mode="auto"; trust_proxy="true"; BIND="127.0.0.1"
@@ -678,6 +805,21 @@ run_install() {
     [ -r "$TLS_KEY" ]  || die "private key not readable: $TLS_KEY"
     tls_mode="manual"
     ok "TLS: serving HTTPS directly (${TLS_CERT})"
+  fi
+  # --tls asserts TLS is required: refuse if we found no certificate source.
+  if [ "$WANT_TLS" = "1" ] && [ "$tls_mode" = "off" ]; then
+    die "--tls given but no certificate source.
+  Pair it with one of:
+    --domain portal.example.com            # automatic HTTPS via Caddy (recommended)
+    --tls-cert C --tls-key K               # bring your own certificate"
+  fi
+  # --public opts in to a wildcard bind (still bound by the TLS gate below).
+  if [ "$PUBLIC_BIND" = "1" ]; then
+    if [ "$tls_mode" = "auto" ]; then
+      warn "--public ignored: --domain already serves publicly via Caddy (portal stays on loopback)"
+    elif is_loopback_bind "$BIND"; then
+      BIND="0.0.0.0"; ok "public bind requested (--public): binding $BIND"
+    fi
   fi
   if [ "$tls_mode" = "off" ] && ! is_loopback_bind "$BIND"; then
     if [ "$INSECURE_PLAINTEXT" = "1" ]; then
@@ -692,26 +834,41 @@ run_install() {
     fi
   fi
 
-  # ── dry-run gate (BEFORE any destructive step) ─────────────────────────
+  # ── dry-run gate (BEFORE any destructive step; Docker not required) ─────
   if [ "$DRY_RUN" = "1" ]; then
     local cur_port="$PORT"
-    [ -f "$CONFIG_FILE" ] && cur_port="$(json_get "$CONFIG_FILE" port)" && [ -n "$cur_port" ] || cur_port="$PORT"
-    info "dry-run — no changes will be made."
-    log "config:   port $cur_port, bind $BIND, gateway $GATEWAY_URL"
+    if [ -f "$CONFIG_FILE" ]; then cur_port="$(json_get "$CONFIG_FILE" port)"; [ -n "$cur_port" ] || cur_port="$PORT"; fi
+    local bind_desc="$BIND"
+    if is_loopback_bind "$BIND"; then bind_desc="$BIND (loopback only)"; else bind_desc="$BIND (PUBLIC)"; fi
     local tls_desc="mode $tls_mode"
     [ "$trust_proxy" = "true" ] && tls_desc="$tls_desc (proxy terminates TLS)"
     [ -n "$DOMAIN" ] && tls_desc="$tls_desc — https://$DOMAIN via Caddy"
     [ -n "$TLS_CERT" ] && tls_desc="$tls_desc — direct HTTPS ($TLS_CERT)"
-    if [ "$tls_mode" = "off" ]; then
-      if is_loopback_bind "$BIND"; then tls_desc="$tls_desc — loopback only"; else tls_desc="$tls_desc — INSECURE PLAINTEXT"; fi
-    fi
-    log "tls:      $tls_desc"
-    log "token:    ${GATEWAY_TOKEN:+provided / auto-detected}${GATEWAY_TOKEN:-<will auto-detect from gateway config>}"
-    log "actions:  write config ($([ "$FORCE_CONFIG" = "1" ] || [ ! -f "$CONFIG_FILE" ] && echo yes || echo no)) · wipe state ($([ "$FRESH" = "1" ] && echo yes || echo no))"
-    log "          build+start container · seed unique admin password (fresh only) · approve device ($([ "$DO_APPROVE" = "1" ] && echo yes || echo no)) · firewall ($([ "$DO_FIREWALL" = "1" ] && echo yes || echo no))"
-    [ -n "$DOMAIN" ] && log "          configure Caddy (automatic certs) → https://$DOMAIN"
+    [ "$tls_mode" = "off" ] && tls_desc="$tls_desc — loopback only"
+    info "dry-run — printing the exact plan. No changes will be made."
+    log "── install plan ─────────────────────────────────"
+    log "   1. config    write $CONFIG_FILE (0600): port $cur_port · bind $bind_desc · sessionTtlHours $SESSION_TTL_HOURS"
+    log "   2. secrets   write $SECRETS_FILE (0600): gateway token for '$GATEWAY_ID' + unique admin password"
+    log "   3. tls       $tls_desc"
+    log "   4. state     $([ "$FRESH" = "1" ] && echo 'wipe device/users/rooms/audit/context, then pre-create' || echo 'keep existing; pre-create any missing')"
+    log "   5. own       chown state to $PORTAL_UID:$PORTAL_GID"
+    log "   6. build     docker compose up -d --build   (container '$CONTAINER_NAME')"
+    log "   7. checks    os · disk>500MB · port $cur_port · DNS ${DOMAIN:-<n/a>} · TLS:443 ${DOMAIN:-<n/a>} · firewall"
+    log "   8. admin     seed unique admin (fresh only) · write $CRED_FILE (0600)"
+    [ -n "$DOMAIN" ] && log "   9. caddy     reverse proxy → https://$DOMAIN (automatic certs)"
+    log "  10. approve   $( [ "$DO_APPROVE" = "1" ] && echo 'openclaw devices approve <id>' || echo 'skipped (--no-approve)' )"
+    log "  11. firewall  $( [ "$DO_FIREWALL" = "1" ] && echo 'ufw allow the right ports' || echo 'skipped (--firewall not given)' )"
+    log "─────────────────────────────────────────────────"
+    log "token: ${GATEWAY_TOKEN:+provided}${GATEWAY_TOKEN:-will auto-detect from the gateway config}"
     return 0
   fi
+
+  # ── from here on we mutate state → snapshot first, arm rollback ──────────
+  detect_docker
+  HAD_CONTAINER_BEFORE=0
+  container_running && HAD_CONTAINER_BEFORE=1
+  snapshot_state
+  trap 'on_install_error $?' ERR
 
   # ── fresh reset ─────────────────────────────────────────────────────────
   if [ "$FRESH" = "1" ]; then
@@ -732,6 +889,20 @@ run_install() {
     ok "existing config found — will keep it (--force-config to rewrite)"
   fi
 
+  # extended preflight (plan item 10): DNS · TLS reachability · firewall
+  if [ -n "$DOMAIN" ]; then
+    if preflight_dns "$DOMAIN"; then ok "DNS: $DOMAIN resolves"
+    else die "DNS: $DOMAIN does not resolve — point an A/AAAA record at this host first.
+  (Set PORTAL_SKIP_DNS_CHECK=1 to bypass this probe, e.g. in CI.)"; fi
+    if preflight_tls_reachable "$DOMAIN" 443; then ok "TLS: $DOMAIN:443 reachable"
+    else warn "TLS: $DOMAIN:443 not reachable yet — Caddy's ACME challenge needs inbound 80/443 (use --firewall or open your firewall)"; fi
+  fi
+  info "firewall: $(preflight_firewall) — open ports with --firewall or manually"
+  if [ "$(container_name_running)" = "$LEGACY_CONTAINER_NAME" ]; then
+    warn "legacy container '$LEGACY_CONTAINER_NAME' is running; new installs use '$CONTAINER_NAME'."
+    warn "  remove it before building to avoid a port clash:  docker rm -f $LEGACY_CONTAINER_NAME"
+  fi
+
   # gateway token
   if [ -z "$GATEWAY_TOKEN" ]; then
     if detect_gateway_token; then
@@ -748,7 +919,7 @@ run_install() {
   if [ -f "$CONFIG_FILE" ] && [ "$FORCE_CONFIG" = "0" ]; then
     local cur_port; cur_port="$(json_get "$CONFIG_FILE" port)"; [ -n "$cur_port" ] && PORT="$cur_port"
   fi
-  if port_in_use "$PORT" && ! docker_ps --format '{{.Names}}' | grep -q "$CONTAINER_NAME"; then
+  if port_in_use "$PORT" && ! container_running; then
     die "port $PORT is already in use by another process (set PORT=... to change)"
   fi
 
@@ -773,7 +944,7 @@ run_install() {
 {
   "port": $PORT,
   "bind": "$BIND",
-  "publicBind": $([ is_loopback_bind "$BIND" ] && echo false || echo true),
+  "publicBind": $(is_loopback_bind "$BIND" && echo false || echo true),
   "gateways": [
     {
       "id": "$GATEWAY_ID",
@@ -810,7 +981,7 @@ EOF
     # --force-config (plan item 5).
     if [ -n "$DOMAIN" ] || [ -n "$TLS_CERT" ] || [ "$INSECURE_PLAINTEXT" = "1" ]; then
       config_patch "bind=$BIND" "tlsMode=$tls_mode" "trustProxy=$trust_proxy" \
-        "publicBind=$([ is_loopback_bind "$BIND" ] && echo false || echo true)" \
+        "publicBind=$(is_loopback_bind "$BIND" && echo false || echo true)" \
         "tlsCert=$TLS_CERT" "tlsKey=$TLS_KEY" \
         "insecurePlaintext=$([ "$INSECURE_PLAINTEXT" = "1" ] && echo true || echo '')"
       ok "updated $CONFIG_FILE: tlsMode=$tls_mode, bind=$BIND${DOMAIN:+ (https://$DOMAIN)}"
@@ -945,6 +1116,10 @@ print(walk(data) or '')
     fi
   fi
 
+  # ── success: disarm rollback ────────────────────────────────────────────
+  rollback_done
+  trap - ERR
+
   # ── receipt ─────────────────────────────────────────────────────────────
   local ip
   ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
@@ -967,7 +1142,14 @@ print(walk(data) or '')
 # ═══════════════════════════════════════════════════════════════════════════
 case "$CMD" in
   install)   run_install ;;
-  upgrade)   detect_docker; log "rebuilding container from current code (state kept)…"; compose up -d --build; ok "upgrade complete — ./install.sh status" ;;
+  upgrade)   detect_docker
+             if [ "$(container_name_running)" = "$LEGACY_CONTAINER_NAME" ]; then
+               warn "legacy container '$LEGACY_CONTAINER_NAME' is running; this build produces '$CONTAINER_NAME'."
+               warn "  stop the old one first to avoid a port clash:  docker rm -f $LEGACY_CONTAINER_NAME"
+             fi
+             log "rebuilding container from current code (state kept)…"
+             compose up -d --build
+             ok "upgrade complete — ./install.sh status" ;;
   status)    detect_docker; run_status ;;
   doctor)    detect_docker; run_doctor ;;
   backup)    run_backup ;;

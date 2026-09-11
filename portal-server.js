@@ -711,7 +711,7 @@ class GatewayClient {
         caps: [], commands: [], permissions: {},
         auth: { token },
         locale: 'en-US',
-        userAgent: 'agent-portal/1.0',
+        userAgent: 'cirrus-portal/1.0',
         device: { id: DEVICE.deviceId, publicKey: DEVICE.pub, signature, signedAt, nonce },
       },
     }));

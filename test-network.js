@@ -129,12 +129,12 @@ const rnd = (base) => base + Math.floor(Math.random() * 60);
     assert(/BIND="\$\{BIND:-127\.0\.0\.1\}"/.test(boot), 'F: bootstrap.sh must default BIND to 127.0.0.1');
     assert(/--firewall\) DO_FIREWALL=1/.test(boot), 'F: bootstrap.sh missing --firewall flag');
     assert(/ufw allow "\$port\/tcp"/.test(boot), 'F: bootstrap.sh missing ufw helper');
-    assert(/"publicBind": \$\(\[ is_loopback_bind "\$BIND" \]/.test(boot), 'F: bootstrap.sh must write publicBind into config');
+    assert(/"publicBind": \$\(is_loopback_bind "\$BIND"/.test(boot), 'F: bootstrap.sh must write publicBind into config');
 
     const inst = fs.readFileSync(path.join(SRC, 'install.sh'), 'utf8');
     assert(/BIND="\$\{BIND:-127\.0\.0\.1\}"/.test(inst), 'F: install.sh must default BIND to 127.0.0.1');
     assert(/--firewall/.test(inst) && /ufw/.test(inst), 'F: install.sh must document --firewall/ufw');
-    assert(/"publicBind": \$\(\[ is_loopback_bind "\$BIND" \]/.test(inst), 'F: install.sh must write publicBind into config');
+    assert(/"publicBind": \$\(is_loopback_bind "\$BIND"/.test(inst), 'F: install.sh must write publicBind into config');
 
     const repl = fs.readFileSync(path.join(SRC, 'REPLICATION.md'), 'utf8');
     assert(/ufw allow/.test(repl), 'F: REPLICATION.md must document the ufw rule');

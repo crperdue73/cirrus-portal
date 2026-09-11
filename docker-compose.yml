@@ -1,7 +1,9 @@
+name: cirrus-portal
+
 services:
-  agent-portal:
+  cirrus-portal:
     build: .
-    container_name: agent-portal
+    container_name: cirrus-portal
     restart: unless-stopped
     # Host networking: the portal must reach the OpenClaw gateway on the
     # host's loopback (ws://127.0.0.1:18790). With host net, UFW still

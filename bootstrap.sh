@@ -179,7 +179,7 @@ fi
 # ── mode: --verify ──────────────────────────────────────────────────────────
 if [ "$VERIFY" = "1" ]; then
   log "container:"
-  docker ps --filter name=agent-portal --format '  {{.Names}}  {{.Status}}  {{.Ports}}' || true
+  docker ps --format '  {{.Names}}  {{.Status}}  {{.Ports}}' | grep -E 'cirrus-portal|agent-portal' || true
   log "gateway reachability (127.0.0.1:18790):"
   if timeout 2 bash -c "</dev/tcp/127.0.0.1/18790" 2>/dev/null; then
     log "  ✓ gateway socket open"
@@ -231,7 +231,7 @@ if [ ! -f "$CONFIG_FILE" ] || [ "$FORCE_CONFIG" = "1" ]; then
 {
   "port": $PORT,
   "bind": "$BIND",
-  "publicBind": $([ is_loopback_bind "$BIND" ] && echo false || echo true),
+  "publicBind": $(is_loopback_bind "$BIND" && echo false || echo true),
   "gatewayUrl": "$GATEWAY_URL",
   "sessionTtlHours": $SESSION_TTL_HOURS
 }

@@ -88,12 +88,12 @@ first boot.
 
 ```bash
 # 1. Get the release onto the new server:
-scp dist/agent-portal-2.1.0.tar.gz user@new-server:/tmp/
+scp dist/cirrus-portal-<version>.tar.gz user@new-server:/tmp/
 
 # 2. SSH in and install (auto-detects the gateway token, generates a strong
 #    admin password, saves credentials to portal-credentials.txt):
-ssh user@new-server 'cd /tmp && tar xzf agent-portal-2.1.0.tar.gz \
-  && cd agent-portal-2.1.0 && ./install.sh install'
+ssh user@new-server 'cd /tmp && tar xzf cirrus-portal-<version>.tar.gz \
+  && cd cirrus-portal-<version> && ./install.sh install'
 
 # 3. Check it:
 ./install.sh status
@@ -142,9 +142,9 @@ Other commands: `./install.sh upgrade|status|doctor|backup|restore FILE|uninstal
 ### 4.1 Copy the code, not the state
 
 ```bash
-mkdir -p /opt/agent-portal
+mkdir -p /opt/cirrus-portal
 scp portal-server.js portal.html Dockerfile docker-compose.yml bootstrap.sh reconnect-test.js \
-    user@new-server:/opt/agent-portal/
+    user@new-server:/opt/cirrus-portal/
 ```
 
 **Never** copy `portal-config.json`, `portal-secrets.json`, `portal-device.json`,
@@ -154,7 +154,7 @@ scp portal-server.js portal.html Dockerfile docker-compose.yml bootstrap.sh reco
 ### 4.2 Point the gateway token at *this* server's gateway
 
 ```bash
-cd /opt/agent-portal
+cd /opt/cirrus-portal
 GATEWAY_TOKEN="$(grep -o '"token": *"[^"]*"' ~/.openclaw/openclaw.json | head -1 | cut -d'"' -f4)" \
     ./bootstrap.sh
 ```
@@ -258,9 +258,9 @@ Then open `http://<server-ip>:18800` and log in as `admin`.
 The upgrade path is exactly the copy step — state files never change:
 
 ```bash
-cd /opt/agent-portal
-scp portal-server.js portal.html Dockerfile docker-compose.yml user@new-server:/opt/agent-portal/
-ssh user@new-server 'cd /opt/agent-portal && docker compose up -d --build'
+cd /opt/cirrus-portal
+scp portal-server.js portal.html Dockerfile docker-compose.yml user@new-server:/opt/cirrus-portal/
+ssh user@new-server 'cd /opt/cirrus-portal && docker compose up -d --build'
 ```
 
 `portal-device.json` persists across rebuilds (bind-mounted), so the gateway
@@ -277,7 +277,7 @@ away. If a bad deploy got in, restore the files and `docker compose up -d
 
 ## 7. Verification checklist (per new server)
 
-- [ ] `docker compose ps` → `agent-portal` Up
+- [ ] `docker compose ps` → `cirrus-portal` Up
 - [ ] `./bootstrap.sh --verify` → all three checks pass
 - [ ] `openclaw devices list` → portal device shows **paired**, scopes include
       `operator.read`, `operator.write`, `operator.approvals`
@@ -297,7 +297,7 @@ away. If a bad deploy got in, restore the files and `docker compose up -d
 |---|---|---|
 | UI loads but "no agents" | Device not approved, or wrong gateway token | `openclaw devices list`; approve with `./bootstrap.sh --approve`; check `gatewayToken` matches `gateway.auth.token` |
 | Log shows `NOT_PAIRED` / scope fallback | Device approved with fewer scopes than requested | Approve the pending scope-upgrade request in `openclaw devices list` |
-| Portal dark after gateway restart | Old reconnect bug (fixed Aug 4) | Should auto-recover ≤30s; if not, `docker compose restart agent-portal` and check `portal.log` |
+| Portal dark after gateway restart | Old reconnect bug (fixed Aug 4) | Should auto-recover ≤30s; if not, `docker compose restart cirrus-portal` and check `portal.log` |
 | `✗ no gateway on 127.0.0.1:18790` in preflight | Gateway not running / not loopback | Start gateway; confirm `gateway.bind: loopback`, port 18790 |
 | Port 18800 unreachable off-host | Firewall | `sudo ufw allow 18800/tcp` |
 | Can't approve: "requires operator.pairing" | Your CLI session lacks pairing scope | Run `openclaw devices approve` from a session with `operator.admin` (e.g. the gateway owner's shell) |

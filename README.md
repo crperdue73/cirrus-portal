@@ -30,10 +30,10 @@ up on any Debian/Ubuntu server that runs an OpenClaw gateway:
 
 ```bash
 # 1. Get the release onto the server:
-scp dist/agent-portal-2.1.0.tar.gz user@server:/tmp/
+scp dist/cirrus-portal-<version>.tar.gz user@server:/tmp/
 
 # 2. Install:
-ssh user@server 'cd /tmp && tar xzf agent-portal-2.1.0.tar.gz && cd agent-portal-2.1.0 \
+ssh user@server 'cd /tmp && tar xzf cirrus-portal-<version>.tar.gz && cd cirrus-portal-<version> \
   && ./install.sh install --firewall'
 
 # 3. Health-check it:
@@ -74,7 +74,7 @@ Full command set:
 ```
 
 `release.sh` builds the versioned, checksummed distribution tarball
-(`dist/agent-portal-<ver>.tar.gz` + `SHA256SUMS`) that contains only code +
+(`dist/cirrus-portal-<ver>.tar.gz` + `SHA256SUMS`) that contains only code +
 installer + docs — never per-server state. The older `bootstrap.sh` remains
 as a legacy path; `install.sh` supersedes it.
 
@@ -412,7 +412,7 @@ to the secrets file instead.
 
 ## Docker deployment (current)
 
-The portal runs as a Docker container (`agent-portal`, host networking,
+The portal runs as a Docker container (`cirrus-portal`, host networking,
 `restart: unless-stopped` — survives reboots).
 
 ```bash
@@ -441,7 +441,9 @@ docker compose down              # stop
 - **Ownership:** because the runtime is non-root, the bind-mounted state files
   must be owned by `10001:10001` — `install.sh`/`bootstrap.sh` chown them for
   you, and `./install.sh doctor` flags it if they drift.
-- The old systemd unit (`agent-portal.service`) is kept but **disabled** as a fallback.
+- The old systemd unit (`agent-portal.service`) is kept but **disabled** as a
+  fallback. (Its unit name is legacy and unchanged — renaming a live systemd
+  unit is a separate ops step.)
 
 ## Service management (old systemd path, fallback)
 

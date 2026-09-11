@@ -8,7 +8,7 @@
 #    ./release.sh [version]     # e.g. ./release.sh 2.1.0  (default: VERSION)
 #
 #  Produces:
-#    dist/agent-portal-<version>.tar.gz   — the distributable
+#    dist/cirrus-portal-<version>.tar.gz   — the distributable
 #    dist/SHA256SUMS                      — checksums for the tarball
 #
 #  The tarball contains ONLY code + installer + docs — never per-server
@@ -22,7 +22,7 @@ cd "$DIR"
 VERSION="${1:-$(cat VERSION 2>/dev/null || echo 2.1.0)}"
 [ -f VERSION ] && [ "$(cat VERSION)" != "$VERSION" ] && echo "$VERSION" > VERSION
 
-PKG="agent-portal-$VERSION"
+PKG="cirrus-portal-$VERSION"
 STAGE="dist/stage/$PKG"
 OUT="dist/$PKG.tar.gz"
 
