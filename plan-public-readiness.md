@@ -49,7 +49,7 @@
   requests, session rotation on login, `logout-all`, configurable TTL, and a
   password policy (length + blocklist).
 
-- [ ] **7. Safe network defaults.**
+- [x] **7. Safe network defaults.** ✅ 2026-09-11
   Default bind `127.0.0.1`; exposing on `0.0.0.0` requires an explicit flag;
   firewall helper (`ufw`) documented; loud startup warning if public without TLS.
 
@@ -219,3 +219,26 @@
   `dist/agent-portal-2.2.0.tar.gz`. Commit `bdc3053`.
   **Note:** lockout state is in-memory (a restart clears it) and keyed per IP+username; durable/
   shared-state lockout and the `ufw` helper remain for items 7/13. No live deploy this run.
+- **2026-09-11** — ✅ **Item 7 done.** Safe network defaults. The server's `DEFAULTS.bind` is now
+  **`127.0.0.1`** (was `0.0.0.0`) and a new **`assertNetworkPolicy()`** (runs before the TLS gate)
+  **refuses any non-loopback bind without an explicit opt-in**: `"publicBind": true` in
+  `portal-config.json`, `PORTAL_PUBLIC_BIND=1`, or `--public-bind`. A wildcard bind (`0.0.0.0`/`::`)
+  additionally logs a loud **`⚠ PUBLIC BIND … listens on ALL interfaces`** warning; the boot banner
+  now prints the real listen surface plus `net: loopback only` / `net: ⚠ PUBLIC` (with a ufw
+  reminder). `install.sh` and `bootstrap.sh` now write `publicBind` into the config (so a deliberate
+  public bind still boots), **bootstrap.sh defaults `BIND` to `127.0.0.1`** (was `0.0.0.0`), gains an
+  `is_loopback_bind` helper, a **`--firewall`** flag + best-effort **`ufw` helper** (`open_firewall`),
+  and a public-bind warning; `install.sh` help gained a **Firewall (ufw)** section and
+  README/REPLICATION document the safe defaults + ufw. Evidence: `node --check` + `bash -n` clean; new
+  **`test-network.js` 6/6** (default bind is loopback · public bind without opt-in refused · opt-in alone
+  still hits the TLS gate · `PORTAL_PUBLIC_BIND=1`+insecure boots loudly · `--public-bind` argv opt-in ·
+  bootstrap/install/docs carry the defaults+ufw); regressions green: `test-tls.js` 6/6 (public-bind
+  cases now declare `publicBind:true`), `test-credentials.js` 3/3, `test-secrets.js` 3/3,
+  `test-setup.js` 3/3, `test-auth.js` 5/5, `secret-scan.sh` clean on the repo AND a freshly built
+  `dist/agent-portal-2.2.0.tar.gz`. Commit `c1e69e6`.
+  **Note:** the installer's loopback default (item 5) and the server's new opt-in gate together close the
+  accidental-exposure hole; a public bind still requires TLS (`--domain`/`--tls-cert`) or
+  `--insecure-plaintext`. **FOLLOW-UP (quiet window + Dad's OK):** the LIVE box's `portal-config.json`
+  still binds `0.0.0.0` with no `publicBind` and `tlsMode:"off"` — a rebuild/restart would now fail BOTH
+  gates; fix it with `./install.sh install --domain …` (recommended) or add `"publicBind": true` +
+  TLS/insecure. No live deploy this run.
