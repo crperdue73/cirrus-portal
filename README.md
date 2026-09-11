@@ -1,7 +1,11 @@
-# Agent Portal 🐯
+# Cirrus Portal 🐯
 
-A browser chat portal that talks **directly to OpenClaw agents** — no Telegram,
-no channel plugins. Open it, pick an agent, and you're chatting with that
+**Mission control for your OpenClaw fleet.** A browser console that talks
+**directly to OpenClaw agents** — no Telegram, no channel plugins.
+
+> Product family: **Cirrus** · engine: **Cirrus Core** · console: **Cirrus Portal**.
+> Naming rationale and canonical strings live in [`NAMING.md`](NAMING.md) and
+> [`branding.json`](branding.json). Public-release plan: [`plan-public-readiness.md`](plan-public-readiness.md). Open it, pick an agent, and you're chatting with that
 agent's **main session** (`agent:<agentId>:main`). History is the agent's real
 session history; replies stream live.
 
@@ -9,7 +13,7 @@ session history; replies stream live.
 > + `./install.sh` — the professional installer. One command per server, code
 > copies, state never does.
 
-## Professional install (v2.1.0, Sep 2026)
+## Professional install (v2.2.0, Sep 2026)
 
 `install.sh` is the polished, production-ready installer for standing the portal
 up on any Debian/Ubuntu server that runs an OpenClaw gateway:

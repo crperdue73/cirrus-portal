@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * Agent Portal — browser chat bridge for OpenClaw agents.
+ * Cirrus Portal — browser console for OpenClaw agent fleets.
+ * (family: Cirrus; engine: Cirrus Core)
  *
  * Serves a single-page chat UI and bridges it to the gateway WebSocket
  * (loopback, device-signed operator connection). Lets you talk to any
@@ -31,6 +32,21 @@ const USERS_PATH = path.join(DIR, 'portal-users.json');
 const AUDIT_PATH = path.join(DIR, 'portal-audit.log');
 const ROOMS_PATH = path.join(DIR, 'portal-rooms.json');
 const CONTEXT_PATH = path.join(DIR, 'portal-context.json');
+const BRANDING_PATH = path.join(DIR, 'branding.json');
+
+// Single source of truth for product identity (see NAMING.md / branding.json).
+const BRAND = (() => {
+  const fallback = {
+    product: 'Cirrus Portal', shortName: 'Cirrus', family: 'Cirrus',
+    engine: 'Cirrus Core', slug: 'cirrus-portal',
+    tagline: 'Mission control for your OpenClaw fleet.', vendor: 'Cirrus',
+  };
+  try {
+    return Object.assign(fallback, JSON.parse(fs.readFileSync(BRANDING_PATH, 'utf8')));
+  } catch {
+    return fallback;
+  }
+})();
 
 const DEFAULTS = {
   port: 18800,
@@ -2290,7 +2306,8 @@ async function handleApi(req, res, url) {
 
 // ── Main ────────────────────────────────────────────────────────────────────
 server.listen(CONFIG.port, CONFIG.bind, () => {
-  console.log(`🟠 Agent Portal (multi-server)`);
+  console.log(`🟠 ${BRAND.product} — ${BRAND.tagline}`);
+  console.log(`   ${BRAND.family} · engine: ${BRAND.engine} · ${BRAND.slug}`);
   console.log(`   http://${CONFIG.bind}:${CONFIG.port}  (LAN: http://<this-host>:${CONFIG.port})`);
   for (const g of GATEWAYS) console.log(`   gateway ${g.id} (${g.name}): ${g.cfg.url}`);
   console.log(`   device:  ${DEVICE.deviceId.slice(0, 12)}…`);

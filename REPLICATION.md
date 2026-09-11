@@ -1,4 +1,4 @@
-# Replicating the Agent Portal — install on N servers
+# Replicating Cirrus Portal — install on N servers
 
 The portal is a **browser chat bridge to OpenClaw agents**. It was built to be
 copied: the app code is two self-contained files with zero dependencies, and
@@ -12,7 +12,7 @@ This doc is the runbook for standing it up on any number of servers.
 ```
 ┌─────────────────────────  SERVER N  ─────────────────────────┐
 │                                                              │
-│   OpenClaw Gateway  ◄──loopback WS──  Agent Portal (Docker)  │
+│   OpenClaw Gateway  ◄──loopback WS──  Cirrus Portal (Docker)  │
 │   :18790 (token auth)            :18800 (browser UI)         │
 │        ▲                              │                      │
 │        │ approves device              ▼                      │

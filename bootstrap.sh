@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════════════
-# Agent Portal — per-server bootstrap installer
+# Cirrus Portal — per-server bootstrap installer
 # ═══════════════════════════════════════════════════════════════════════════
 # One command to stand up a fresh portal instance on a new server.
 #
@@ -39,7 +39,7 @@ usage() {
   cat <<'EOF'
 Usage: ./bootstrap.sh [options]
 
-Install / manage an Agent Portal instance on THIS server.
+Install / manage a Cirrus Portal instance on THIS server.
 
 Options:
   --fresh          Wipe local state (device identity, users, rooms, audit,

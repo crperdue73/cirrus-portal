@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════════════
-#  Agent Portal — release packager
+#  Cirrus Portal — release packager
 #  ───────────────────────────────────────────────────────────────────────────
 #  Builds a clean, versioned, checksummed distribution tarball that can be
 #  copied to any number of servers and installed with one command.

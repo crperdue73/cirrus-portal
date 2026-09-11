@@ -1,0 +1,11 @@
+{
+  "product": "Cirrus Portal",
+  "shortName": "Cirrus",
+  "family": "Cirrus",
+  "engine": "Cirrus Core",
+  "slug": "cirrus-portal",
+  "tagline": "Mission control for your OpenClaw fleet.",
+  "vendor": "Cirrus",
+  "releaseLine": "3.x (public)",
+  "started": "2026-09-10"
+}

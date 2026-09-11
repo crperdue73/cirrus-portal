@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════════════
-#  Agent Portal — professional installer v2
+#  Cirrus Portal — professional installer v2
 #  ───────────────────────────────────────────────────────────────────────────
-#  One command to stand up a polished, hardened Agent Portal instance on any
+#  One command to stand up a polished, hardened Cirrus Portal instance on any
 #  Debian/Ubuntu-class server that already runs an OpenClaw gateway.
 #
 #    ./install.sh install             # detect → configure → build → run
@@ -26,9 +26,13 @@
 # ═══════════════════════════════════════════════════════════════════════════
 set -euo pipefail
 
-# ── version ─────────────────────────────────────────────────────────────────
-VERSION="2.1.0"
-APP_NAME="Agent Portal"
+# ── identity (single source of truth: branding.json / VERSION) ─────────────
+VERSION="$(cat VERSION 2>/dev/null | tr -d '[:space:]')"
+VERSION="${VERSION:-2.2.0}"
+APP_NAME="$(sed -n 's/.*"product"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' branding.json 2>/dev/null | head -1)"
+APP_NAME="${APP_NAME:-Cirrus Portal}"
+TAGLINE="$(sed -n 's/.*"tagline"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' branding.json 2>/dev/null | head -1)"
+TAGLINE="${TAGLINE:-Mission control for your OpenClaw fleet.}"
 
 # ── paths ───────────────────────────────────────────────────────────────────
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -82,7 +86,7 @@ die()  { printf '%s[✗]%s %s\n' "$C_RED" "$C_RST" "$*" >&2 | tee -a "$LOG_FILE"
 # ── usage ───────────────────────────────────────────────────────────────────
 usage() {
   cat <<EOF
-$C_BLU$APP_NAME installer v$VERSION$C_RST — professional install for OpenClaw agent portals
+$C_BLU$APP_NAME installer v$VERSION$C_RST — professional install for OpenClaw agent fleets
 
 $C_CYN Usage:$C_RST
   ./install.sh <command> [options]

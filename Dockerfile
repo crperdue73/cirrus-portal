@@ -1,4 +1,5 @@
-# Agent Portal 🐯 — browser chat bridge to OpenClaw agents
+# Cirrus Portal 🐯 — browser console for OpenClaw agent fleets
+# Family: Cirrus · Engine: Cirrus Core
 # Zero-dependency Node 22 server. No npm install step.
 
 FROM node:22-alpine
@@ -6,7 +7,7 @@ FROM node:22-alpine
 WORKDIR /app
 
 # Server + UI. Config and device identity persist via volumes (docker-compose.yml).
-COPY portal-server.js portal.html nexus.html ./
+COPY portal-server.js portal.html nexus.html branding.json ./
 
 EXPOSE 18800
 

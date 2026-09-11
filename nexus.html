@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nexus — Spark Control</title>
+<style>
+  :root{
+    --bg:#0a0a0a; --panel:#141414; --panel2:#1e1e1e; --line:#2a2a2a;
+    --text:#e8e8e8; --muted:#8f8f8f; --slate:#73a3c8; --amber:#00d4e8; --amber2:#4ee3f5;
+    --ok:#34d399; --warn:#fbbf24; --err:#f87171; --info:#60a5fa;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font:14px/1.5 -apple-system,"Segoe UI",Roboto,Ubuntu,sans-serif;padding:24px;max-width:1100px;margin:0 auto}
+  header{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:18px}
+  h1{font-size:22px;letter-spacing:.5px}
+  h1 .dot{color:var(--amber)}
+  .sub{color:var(--muted);font-size:12px}
+  .updated{color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
+  .updated b{color:var(--text)}
+  /* spine health banner */
+  #spine{border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin-bottom:18px;display:flex;align-items:center;gap:12px;background:var(--panel)}
+  #spine .pulse{width:10px;height:10px;border-radius:50%;background:var(--muted);flex:none}
+  #spine.ok .pulse{background:var(--ok);box-shadow:0 0 8px var(--ok)}
+  #spine.warn .pulse{background:var(--warn);box-shadow:0 0 8px var(--warn)}
+  #spine.err .pulse{background:var(--err);box-shadow:0 0 8px var(--err)}
+  #spine .title{font-weight:600}
+  #spine .detail{color:var(--muted);font-size:12px}
+  /* stats strip */
+  #stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:18px}
+  .stat{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 14px}
+  .stat .n{font-size:24px;font-weight:700;font-variant-numeric:tabular-nums}
+  .stat .l{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:1px}
+  .stat .n.s-requested{color:var(--info)} .stat .n.s-provisioning{color:var(--warn)}
+  .stat .n.s-ready{color:var(--ok)} .stat .n.s-in_use{color:var(--amber2)}
+  .stat .n.s-stopped{color:var(--muted)}
+  .stat .n.s-expired{color:var(--slate)} .stat .n.s-destroying{color:#c084fc}
+  .stat .n.s-destroyed{color:#6b7280} .stat .n.s-failed{color:var(--err)}
+  /* lab cards */
+  #labs{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px}
+  .lab{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;position:relative;overflow:hidden}
+  .lab::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--muted)}
+  .lab.state-requested::before{background:var(--info)}
+  .lab.state-provisioning::before{background:var(--warn)}
+  .lab.state-ready::before{background:var(--ok)}
+  .lab.state-in_use::before{background:var(--amber2)}
+  .lab.state-stopped::before{background:var(--muted)}
+  .lab.state-expired::before{background:var(--slate)}
+  .lab.state-destroying::before{background:#c084fc}
+  .lab.state-destroyed::before{background:#6b7280}
+  .lab.state-failed::before{background:var(--err)}
+  .lab .name{font-weight:600;font-size:15px;display:flex;align-items:center;gap:8px}
+  .lab .badge{margin-left:auto;font-size:10px;text-transform:uppercase;letter-spacing:.8px;padding:3px 8px;border-radius:99px;border:1px solid var(--line);color:var(--muted)}
+  .lab.state-requested .badge{color:var(--info);border-color:var(--info)}
+  .lab.state-provisioning .badge{color:var(--warn);border-color:var(--warn)}
+  .lab.state-ready .badge{color:var(--ok);border-color:var(--ok)}
+  .lab.state-in_use .badge{color:var(--amber2);border-color:var(--amber2)}
+  .lab.state-stopped .badge{color:var(--muted)}
+  .lab.state-expired .badge{color:var(--slate);border-color:var(--slate)}
+  .lab.state-destroying .badge{color:#c084fc;border-color:#c084fc}
+  .lab.state-destroyed .badge{color:#6b7280;border-color:#6b7280}
+  .lab.state-failed .badge{color:var(--err);border-color:var(--err)}
+  .lab .meta{color:var(--muted);font-size:12px;margin-top:8px}
+  .lab .meta b{color:var(--text);font-weight:600}
+  .lab .note{color:var(--muted);font-size:12px;margin-top:4px;font-style:italic}
+  .empty{grid-column:1/-1;text-align:center;color:var(--muted);padding:40px 0;border:1px dashed var(--line);border-radius:12px}
+  footer{margin-top:20px;color:var(--muted);font-size:11px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px}
+  .pill{font-size:10px;text-transform:uppercase;letter-spacing:1px;padding:3px 8px;border-radius:99px;border:1px solid var(--line);color:var(--muted)}
+  .pill.live{color:var(--ok);border-color:var(--ok)}
+  .pill.demo{color:var(--warn);border-color:var(--warn)}
+</style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1><span class="dot">◆</span> NEXUS <span style="color:var(--muted);font-weight:400;font-size:14px">/ spark</span></h1>
+      <div class="sub">Lab control plane · Cirrus Core</div>
+    </div>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <span id="mode" class="pill">connecting</span>
+      <span class="updated">updated <b id="updated">—</b> · refresh <b id="countdown">5s</b></span>
+    </div>
+  </header>
+
+  <div id="spine"><span class="pulse"></span><div><div class="title">Spine</div><div class="detail" id="spineDetail">checking…</div></div></div>
+
+  <div id="stats"></div>
+  <div id="labs"><div class="empty">Loading lab status…</div></div>
+
+  <footer>
+    <span>Nexus web surface · served by Cirrus Core (Noah) · API: <span id="apiUrl">—</span></span>
+    <span>state: requested · provisioning · ready · in_use · stopped</span>
+  </footer>
+
+<script>
+// ─── Config ────────────────────────────────────────────────────────────────
+// Point at Aurora's lab-status API. Override with ?api=<url> or ?demo=1.
+const DEFAULT_API = 'http://192.168.1.234:8080/api';
+const DEMO = new URLSearchParams(location.search).has('demo');
+const API  = new URLSearchParams(location.search).get('api') || DEFAULT_API;
+const REFRESH_MS = 5000;
+
+// ─── Demo data (renders instantly even before Aurora's API is live) ────────
+const DEMO_LABS = [
+  { id:'lab-101', name:'Lab 101 · Networking', state:'ready',        owner:'mr. avery', since:'2h ago' },
+  { id:'lab-102', name:'Lab 102 · Linux I',    state:'in_use',       owner:'ms. chen',   since:'14m ago' },
+  { id:'lab-103', name:'Lab 103 · Security',   state:'provisioning', owner:null,         since:'now' },
+  { id:'lab-104', name:'Lab 104 · Databases',  state:'requested',    owner:null,         since:'1m ago' },
+  { id:'lab-105', name:'Lab 105 · Web Dev',    state:'stopped',      owner:'mr. avery',  since:'3d ago' },
+];
+const DEMO_SPINE = { ok:true, services: 12, latencyMs: 8 };
+
+const STATE_ORDER = ['requested','provisioning','ready','in_use','stopped','expired','destroying','destroyed','failed'];
+const STATE_LABEL = { requested:'requested', provisioning:'provisioning', ready:'ready', in_use:'in use', stopped:'stopped', expired:'expired', destroying:'destroying', destroyed:'destroyed', failed:'failed' };
+
+let countdown = REFRESH_MS / 1000;
+
+// ─── Rendering ─────────────────────────────────────────────────────────────
+const $ = s => document.querySelector(s);
+
+function renderSpine(h) {
+  const el = $('#spine');
+  el.className = '';
+  if (!h) { el.classList.add('err'); $('#spineDetail').textContent = 'unreachable — API not responding'; return; }
+  if (h.ok) {
+    el.classList.add('ok');
+    const svc = typeof h.services === 'number' ? h.services
+      : h.services && typeof h.services === 'object' ? Object.keys(h.services).length
+      : '—';
+    $('#spineDetail').textContent = `healthy · ${svc} services · ${h.latencyMs ?? '—'}ms`;
+  } else if (h.degraded) {
+    el.classList.add('warn');
+    $('#spineDetail').textContent = `degraded · ${h.message || ''}`;
+  } else {
+    el.classList.add('err');
+    $('#spineDetail').textContent = `down · ${h.message || ''}`;
+  }
+}
+
+function renderStats(labs) {
+  const counts = Object.fromEntries(STATE_ORDER.map(s => [s, 0]));
+  labs.forEach(l => { if (l.state in counts) counts[l.state]++; });
+  const total = labs.length;
+  $('#stats').innerHTML = [
+    ['total', total, ''],
+    ...STATE_ORDER.map(s => [s, counts[s], 's-' + s]),
+  ].map(([label, n, cls]) =>
+    `<div class="stat"><div class="n ${cls}">${n}</div><div class="l">${label.replace('_',' ')}</div></div>`
+  ).join('');
+}
+
+function renderLabs(labs) {
+  const el = $('#labs');
+  if (!labs.length) { el.innerHTML = '<div class="empty">No labs registered yet.</div>'; return; }
+  el.innerHTML = labs.map(l => {
+    const st = STATE_LABEL[l.state] || l.state;
+    const owner = l.owner ? `<div class="meta">owner: <b>${esc(l.owner)}</b>${l.since ? ` · since <b>${esc(l.since)}</b>` : ''}</div>` : '';
+    const note = l.note ? `<div class="note">${esc(l.note)}</div>` : '';
+    return `<div class="lab state-${esc(l.state)}"><div class="name">${esc(l.name || l.id)}<span class="badge">${st}</span></div>${owner}${note}</div>`;
+  }).join('');
+}
+
+function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+// ─── Fetching ──────────────────────────────────────────────────────────────
+async function tick() {
+  const t0 = Date.now();
+  let labs = [], spine = null;
+  try {
+    const [lr, hr] = await Promise.all([
+      fetch(`${API}/labs`).then(r => r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status))),
+      fetch(`${API}/health`).then(r => r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status))).catch(() => null),
+    ]);
+    labs = Array.isArray(lr) ? lr : (lr.labs || []);
+    spine = hr;
+    $('#mode').textContent = 'live'; $('#mode').className = 'pill live';
+  } catch (e) {
+    $('#mode').textContent = 'api offline'; $('#mode').className = 'pill';
+    $('#spineDetail').textContent = `unreachable — ${e.message}`;
+    $('#spine').className = 'err';
+  }
+  renderSpine(spine);
+  renderStats(labs);
+  renderLabs(labs);
+  $('#updated').textContent = new Date().toLocaleTimeString();
+  $('#apiUrl').textContent = API;
+  countdown = REFRESH_MS / 1000;
+}
+
+// demo mode: static data so the surface is visible before the API lands
+if (DEMO) {
+  $('#mode').textContent = 'demo'; $('#mode').className = 'pill demo';
+  renderSpine(DEMO_SPINE);
+  renderStats(DEMO_LABS);
+  renderLabs(DEMO_LABS);
+  $('#updated').textContent = new Date().toLocaleTimeString();
+  $('#apiUrl').textContent = API + ' (demo)';
+} else {
+  tick();
+  setInterval(() => {
+    countdown = Math.max(0, countdown - 1);
+    $('#countdown').textContent = countdown + 's';
+    if (countdown <= 0) tick();
+  }, 1000);
+}
+</script>
+</body>
+</html>
