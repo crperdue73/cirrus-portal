@@ -330,3 +330,8 @@
   OSS license (MIT / Apache-2.0 / AGPL); (2) the copyright-holder line (`© 2026 CRPerdue Technologies, LLC`?);
   (3) approval to publish `SECURITY.md` (disclosure policy), third-party notices, and acceptable-use terms for
   public hosts. Once decided, this item is a small, mostly-mechanical change set.
+- **2026-09-11 (run 18:41)** — ⛔ **Item 11 re-checked: still BLOCKED, no change.** First unchecked item is
+  again #11; re-verified that no software-license model exists in the family work and no decision has arrived
+  from Dad. Per the plan's own rule the box stays unticked and nothing was authored (no `LICENSE`/terms).
+  **Standing block — subsequent runs will NOT add duplicate BLOCKED entries until Dad decides;** refer to the
+  2026-09-11 16:42 note above for the exact decisions needed. Item 12+ remain intentionally gated behind this.
