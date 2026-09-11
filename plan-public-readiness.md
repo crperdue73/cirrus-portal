@@ -14,7 +14,7 @@
 
 ## Action Items
 
-- [ ] **1. Lock the official name + single-source branding.**
+- [x] **1. Lock the official name + single-source branding.** ✅ 2026-09-10
   Adopt **Cirrus Portal** as the official product name. Create `branding.json` as
   the single source of truth (name/short/family/tagline/slug), write `NAMING.md`
   (decision + rationale + alternates), replace every "Agent Portal" string in
@@ -113,4 +113,11 @@
 
 ## Progress log
 
-- **2026-09-10** — Plan created. Official name chosen: **Cirrus Portal**. Item 1 in progress.
+- **2026-09-10** — Plan created. Official name chosen: **Cirrus Portal**.
+- **2026-09-10** — ✅ **Item 1 done.** `branding.json` + `NAMING.md` added; name propagated
+  through `portal.html`, `portal-server.js` (reads branding.json at boot), `install.sh`,
+  `README.md`, `REPLICATION.md`, `bootstrap.sh`, `release.sh`, `Dockerfile`; version drift
+  fixed (installer now reads `VERSION` = 2.2.0). Commit `64c5996`; live container rebuilt
+  and verified: title `Cirrus Portal`, `/` 200, both gateways connected, `install.sh status`
+  all-checks-passed. Left for later items: container/compose/service name still `agent-portal`
+  (rename belongs with installer v3, item 10, to keep it a coordinated deploy).
