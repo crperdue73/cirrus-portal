@@ -53,7 +53,7 @@
   Default bind `127.0.0.1`; exposing on `0.0.0.0` requires an explicit flag;
   firewall helper (`ufw`) documented; loud startup warning if public without TLS.
 
-- [ ] **8. Container hardening.**
+- [x] **8. Container hardening.** ✅ 2026-09-11
   Non-root user in the image, `HEALTHCHECK` directive, read-only root filesystem
   where possible, pinned base-image digest, resource limits, and dropped caps
   (already partially done).
@@ -242,3 +242,26 @@
   still binds `0.0.0.0` with no `publicBind` and `tlsMode:"off"` — a rebuild/restart would now fail BOTH
   gates; fix it with `./install.sh install --domain …` (recommended) or add `"publicBind": true` +
   TLS/insecure. No live deploy this run.
+- **2026-09-11** — ✅ **Item 8 done.** Container hardening. The image is now **digest-pinned**
+  (`FROM node:22-alpine@sha256:c610fcdf…`) and runs as a dedicated **unprivileged `portal` user
+  (uid:gid 10001)** — never root; a `HEALTHCHECK` probes loopback `GET /` via the new **`healthcheck.js`**
+  (any HTTP response = healthy, incl. 302/503 in first-run SETUP mode). `docker-compose.yml` gained
+  **`read_only: true`** (+ a size-capped `/tmp` tmpfs so the rootfs can stay immutable), **`mem_limit: 512m`**
+  / **`cpus: "1.0"`** / **`pids_limit: 256`**, keeping `cap_drop: ALL` + `no-new-privileges`. Because the
+  runtime is non-root, `install.sh`/`bootstrap.sh` now **chown the bind-mounted state to `10001:10001`**
+  (and `doctor` flags ownership drift); the secrets write learned a **read-only-rootfs-safe fallback**
+  (write the bind-mounted target directly when the temp-stage/rename can't). `healthcheck.js` added to
+  `release.sh` FILES + Dockerfile COPY; README/REPLICATION document the model. Evidence: `node --check`
+  (server+healthcheck+test) + `bash -n` (install/bootstrap/release/secret-scan) clean; new
+  **`test-container.js` 6/6** (Dockerfile digest+non-root+healthcheck · compose read-only/tmpfs/caps/limits ·
+  healthcheck 0-up/1-down · ships · installer chown+doctor · secrets survive an unavailable temp stage);
+  regressions green: `test-credentials.js` 3/3, `test-secrets.js` 3/3, `test-setup.js` 3/3, `test-tls.js`
+  6/6, `test-network.js` 6/6, `test-auth.js` 5/5, `secret-scan.sh` clean (repo + freshly built
+  `dist/agent-portal-2.2.0.tar.gz`, now carrying `healthcheck.js`); **`docker build` succeeded** and a live
+  throwaway container ran **non-root + read-only + tmpfs**, wrote its bind-mounted state, and reached
+  **`health = healthy`**. Commit `222048d`.
+  **Note:** the container/service names (`agent-portal`) and the compose `image:` rename still belong to
+  item 10. **FOLLOW-UP (quiet window + Dad's awareness):** the LIVE box still runs the old root image with
+  no read-only rootfs and its state files are root-owned — before the next `docker compose up -d --build`,
+  the new image will run as uid 10001 and needs the state chown'd to `10001:10001` (`./install.sh install`
+  now does this) or the server can't read its config/secrets. No live deploy this run.
