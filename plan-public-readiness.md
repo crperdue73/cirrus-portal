@@ -172,7 +172,7 @@
   **`test-setup.js` 3/3** (fresh→setup mode + all routes refused; weak pw rejected then valid
   wizard mints + session works + setup closes; headless box skips wizard); regressions green:
   `test-credentials.js` 3/3, `test-secrets.js` 3/3, `secret-scan.sh` clean (repo + freshly
-  built `dist/agent-portal-2.2.0.tar.gz`, which now contains `setup.html`). Commit `<pending>`.
+  built `dist/agent-portal-2.2.0.tar.gz`, which now contains `setup.html`). Commit `f2a6acf`.
   **Follow-up:** bind/port chosen in the wizard persist to config but only apply on the next
   restart (`restartRequired:true` is returned); real TLS termination still lands in item 5;
   the wizard is not yet surfaced by `install.sh` messaging (item 10).
