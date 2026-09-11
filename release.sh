@@ -47,6 +47,7 @@ FILES=(
   deploy/nginx/cirrus-portal.conf
   README.md
   REPLICATION.md
+  DEPLOYMENT.md
   VERSION
 )
 

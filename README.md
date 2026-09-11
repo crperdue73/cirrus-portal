@@ -12,6 +12,10 @@ session history; replies stream live.
 > **📦 Replicating this on another server?** See [`REPLICATION.md`](REPLICATION.md)
 > + `./install.sh` — the professional installer. One command per server, code
 > copies, state never does.
+>
+> **🏢 Deployment model:** Cirrus Portal is **single-tenant, self-hosted** — one
+> org per install. Supported platforms and explicit non-goals are in
+> [`DEPLOYMENT.md`](DEPLOYMENT.md).
 
 ## Professional install (v2.2.0, Sep 2026)
 
