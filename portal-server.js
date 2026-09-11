@@ -59,12 +59,83 @@ const DEFAULTS = {
   reconnectMaxMs: 30000,
 };
 
-// Generic-login convention (Aug 18 2026): every deployment ships with the
-// same documented default admin credential so the deployer can get in on
-// day one, then changes it (bootstrap.sh PORTAL_PASSWORD, or the Users →
-// reset pw button). The UI shows a nag banner until it's changed.
-const GENERIC_ADMIN_USER = 'admin';
-const GENERIC_ADMIN_PASSWORD = 'admin';
+// ── Credential safety ────────────────────────────────────────────────────────
+// Passwords that must NEVER grant access. Historically every deployment
+// shipped the SAME admin/admin login plus a shared `portalPassword`; that
+// convention is gone (see plan item 2). Fresh installs now mint a UNIQUE
+// admin password (or read one from PORTAL_ADMIN_PASSWORD / portal-config.json),
+// and the server refuses to start if an admin account still matches a known
+// default (see assertNoDefaultCreds).
+const KNOWN_DEFAULT_PASSWORDS = [
+  'admin', 'password', 'changeme', 'change-me', 'letmein', 'portal',
+  'cirrus', 'perdue-portal-2026', 'instructor-demo', 'student-demo',
+];
+
+function hashPassword(password, salt) {
+  return crypto.scryptSync(String(password), salt, 64).toString('hex');
+}
+
+// True if this account's stored hash matches any known-default password.
+function usesKnownDefaultCred(u) {
+  if (!u || !u.hash || !u.salt) return false;
+  const want = Buffer.from(u.hash, 'hex');
+  for (const pw of KNOWN_DEFAULT_PASSWORDS) {
+    const h = Buffer.from(hashPassword(pw, u.salt), 'hex');
+    if (h.length === want.length && crypto.timingSafeEqual(h, want)) return true;
+  }
+  return false;
+}
+
+// Cryptographically-strong, human-transcribable password (no look-alike chars).
+function genStrongPassword(len = 24) {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+  let out = '';
+  const bytes = crypto.randomBytes(len * 3);
+  for (let i = 0; i < bytes.length && out.length < len; i++) out += alphabet[bytes[i] % alphabet.length];
+  return out;
+}
+
+// First-run admin bootstrap secret: explicit env wins, then portal-config.json,
+// else generate a unique one.
+function resolveBootstrapPassword() {
+  const provided = process.env.PORTAL_ADMIN_PASSWORD || process.env.PORTAL_PASSWORD || CONFIG.portalPassword;
+  if (provided && String(provided).trim()) return { password: String(provided).trim(), generated: false };
+  return { password: genStrongPassword(), generated: true };
+}
+
+// Drop a generated first-run password in a 0600 file the installer/operator
+// can read (and then delete).
+function writeFirstRunCredentials(password) {
+  try {
+    const p = path.join(DIR, 'portal-first-run.txt');
+    fs.writeFileSync(p,
+      `# ${BRAND.product} — generated first-run admin password\n` +
+      `# Keep this safe, then delete this file.\n` +
+      `url:      http://<this-host>:${CONFIG.port}/\n` +
+      `user:     admin\n` +
+      `password: ${password}\n`, { mode: 0o600 });
+    try { fs.chmodSync(p, 0o600); } catch { /* best effort */ }
+    return p;
+  } catch (e) {
+    console.error('[portal] could not write first-run credentials:', e.message);
+    return null;
+  }
+}
+
+// Startup guard: never serve with a known-default credential.
+function assertNoDefaultCreds() {
+  const offenders = USERS.filter(u => u.role === 'admin' && usesKnownDefaultCred(u));
+  if (!offenders.length) return;
+  const names = offenders.map(u => u.username).join(', ');
+  if (process.env.PORTAL_ALLOW_INSECURE_DEFAULTS === '1') {
+    console.warn(`[portal] ⚠ PORTAL_ALLOW_INSECURE_DEFAULTS=1 — admin account(s) ${names} use a KNOWN DEFAULT password. Never expose this publicly.`);
+    return;
+  }
+  console.error(`[portal] FATAL: refusing to start — admin account(s) still use a known default password: ${names}`);
+  console.error('[portal] Fix it: set a strong password (Users → reset pw, or PORTAL_ADMIN_PASSWORD=...), or delete the account and let the portal mint a fresh one.');
+  console.error('[portal] Dev-only escape hatch: PORTAL_ALLOW_INSECURE_DEFAULTS=1');
+  process.exit(1);
+}
 
 function loadConfig() {
   const cfg = { ...DEFAULTS };
@@ -748,32 +819,35 @@ function handleApprovalResolved(kind, payload, client) {
 const ROLES = { student: 1, instructor: 2, admin: 3 };
 const USERNAME_RE = /^[a-z0-9][a-z0-9._-]{1,31}$/;
 
-function hashPassword(password, salt) {
-  return crypto.scryptSync(String(password), salt, 64).toString('hex');
-}
-
 function loadUsers() {
   let users = [];
   try {
     const raw = JSON.parse(fs.readFileSync(USERS_PATH, 'utf8'));
     if (Array.isArray(raw.users)) users = raw.users;
   } catch (e) { /* first run */ }
-  // Bootstrap: every deployment seeds the SAME generic admin credential
-  // (admin / admin — documented in README/REPLICATION). The deployer changes
-  // it after first login; the UI nags via /api/me defaultCreds until they do.
+  // First run: mint ONE admin. No shipped default — the password comes from
+  // PORTAL_ADMIN_PASSWORD / PORTAL_PASSWORD / portal-config.json, or a unique
+  // random one is generated and written to portal-first-run.txt (0600).
   if (!users.some(u => u.role === 'admin')) {
+    const boot = resolveBootstrapPassword();
     const salt = crypto.randomBytes(16).toString('hex');
     users.push({
-      username: GENERIC_ADMIN_USER,
+      username: 'admin',
       displayName: 'Admin',
       role: 'admin',
       agents: ['*'],
       assignments: [],
-      hash: hashPassword(GENERIC_ADMIN_PASSWORD, salt),
+      hash: hashPassword(boot.password, salt),
       salt,
       createdAt: Date.now(),
     });
-    console.warn('[portal] no admin account found — bootstrapped generic "admin" (change the password after first login)');
+    if (boot.generated) {
+      const f = writeFirstRunCredentials(boot.password);
+      console.warn('[portal] no admin account found — created "admin" with a UNIQUE generated password.');
+      console.warn(`[portal] retrieve it from ${f || 'portal-first-run.txt'} (chmod 600), then change it after first login.`);
+    } else {
+      console.warn('[portal] no admin account found — created "admin" using the configured bootstrap password.');
+    }
   }
   saveUsers(users);
   return users;
@@ -788,6 +862,7 @@ function saveUsers(users) {
 }
 
 let USERS = loadUsers();
+assertNoDefaultCreds();
 
 function findUser(username) {
   return USERS.find(u => u.username === String(username).toLowerCase());
@@ -1616,15 +1691,11 @@ async function handleApi(req, res, url) {
   // ── Public ──
   if (p === '/api/me') {
     const u = currentUser(req);
-    // Generic-login convention (Aug 18 2026): every deployment ships with the
-    // same documented default admin credential (admin / admin, seeded by
-    // bootstrap.sh). defaultCreds=true tells the UI to keep nagging the
-    // deployer to change it until they do.
-    let defaultCreds = false;
-    if (u && u.role === 'admin') {
-      defaultCreds = USERS.some(admin =>
-        admin.role === 'admin' && admin.username === GENERIC_ADMIN_USER && verifyUser(admin.username, GENERIC_ADMIN_PASSWORD));
-    }
+    // defaultCreds=true only if an admin still uses a known-default password.
+    // No defaults ship anymore, and the startup guard blocks boot on one — so
+    // this is only reachable under PORTAL_ALLOW_INSECURE_DEFAULTS=1 (dev only).
+    const defaultCreds = !!(u && u.role === 'admin' &&
+      USERS.some(a => a.role === 'admin' && usesKnownDefaultCred(a)));
     return json(res, 200, u
       ? { authed: true, user: publicUser(u), role: u.role, defaultCreds }
       : { authed: false, defaultCreds: false });

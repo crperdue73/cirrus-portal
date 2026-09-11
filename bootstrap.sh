@@ -60,8 +60,9 @@ Env (for non-interactive installs):
   GATEWAY_TOKEN      The target server's OpenClaw gateway token (required on
                      first install; MUST match gateway.auth.token).
   PORTAL_PASSWORD    Browser login password for the admin account. If unset on
-                     first install, the generic default is used (admin / admin)
-                     — change it after first login.
+                     first install, a strong UNIQUE one is generated and saved
+                     to portal-credentials.txt (0600) on the server — there is
+                     no shipped default login.
   PORT / BIND / GATEWAY_URL / SESSION_TTL_HOURS  (optional overrides)
 
 Examples:
@@ -86,6 +87,13 @@ done
 log()  { printf '\033[1;34m[portal]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[portal!]\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31m[portal!]\033[0m %s\n' "$*" >&2; exit 1; }
+
+# Strong, unique password for first-run admin seeding (no shipped default).
+gen_password() {
+  if command -v openssl >/dev/null 2>&1; then openssl rand -base64 24 | tr -d '/+=' | head -c 24
+  elif [ -r /dev/urandom ]; then head -c 32 /dev/urandom | base64 | tr -d '/+=' | head -c 24
+  else echo "CHANGE-ME-$(date +%s)"; fi
+}
 
 # ── mode: --approve ─────────────────────────────────────────────────────────
 if [ "$APPROVE" = "1" ]; then
@@ -159,8 +167,8 @@ fi
 
 # ── fresh reset ─────────────────────────────────────────────────────────────
 if [ "$FRESH" = "1" ]; then
-  warn "wiping local state: device, users, rooms, audit, context, logs"
-  rm -f portal-device.json portal-users.json portal-rooms.json portal-context.json portal-audit.log portal.log
+  warn "wiping local state: device, users, rooms, audit, context, logs, credentials"
+  rm -f portal-device.json portal-users.json portal-rooms.json portal-context.json portal-audit.log portal.log portal-first-run.txt portal-credentials.txt
 fi
 
 # ── config ──────────────────────────────────────────────────────────────────
@@ -178,14 +186,13 @@ fi
 # Keep existing values when not forcing, fill from env otherwise.
 if [ ! -f "$CONFIG_FILE" ] || [ "$FORCE_CONFIG" = "1" ]; then
   PORTAL_PASSWORD="${PORTAL_PASSWORD:-}"
+  GENERATED_PW=0
   if [ -z "$PORTAL_PASSWORD" ]; then
-    # Generic-login convention: every deployment ships with the SAME default
-    # admin credential (admin / admin) so the deployer can get in on day one.
-    # Change it right after first login — PORTAL_PASSWORD=... ./bootstrap.sh
-    # --force-config, or the portal's Users → reset pw button.
-    PORTAL_PASSWORD="admin"
-    warn "no PORTAL_PASSWORD given — using the GENERIC default (admin / admin)"
-    warn "  ⚠ change it after first login (Users → reset pw, or re-run with PORTAL_PASSWORD=... --force-config)"
+    # No shipped default: mint a strong, unique admin password. The server
+    # seeds the admin account with this value on first boot — never admin/admin.
+    PORTAL_PASSWORD="$(gen_password)"
+    GENERATED_PW=1
+    log "no PORTAL_PASSWORD given — generated a strong unique admin password"
   fi
   umask 177
   cat > "$CONFIG_FILE" <<EOF
@@ -200,6 +207,15 @@ if [ ! -f "$CONFIG_FILE" ] || [ "$FORCE_CONFIG" = "1" ]; then
 EOF
   chmod 600 "$CONFIG_FILE"
   log "wrote $CONFIG_FILE (0600)"
+  # Save first-run credentials so the deployer can log in (0600).
+  cat > portal-credentials.txt <<EOF
+# $APP_NAME — install credentials  ($(date -Is))
+url:      http://$(hostname -I 2>/dev/null | awk '{print $1}'):$PORT/
+user:     admin
+password: $PORTAL_PASSWORD
+EOF
+  chmod 600 portal-credentials.txt
+  [ "$GENERATED_PW" = "1" ] && warn "admin password generated → saved to portal-credentials.txt (0600) — CHANGE IT after first login"
 else
   log "$CONFIG_FILE exists — keeping it (use --force-config to rewrite)"
 fi
@@ -242,5 +258,10 @@ log "next steps:"
 log "  1. Approve the portal's device on the gateway:   ./bootstrap.sh --approve"
 log "     (or manually: openclaw devices list && openclaw devices approve <requestId>)"
 log "  2. Open the portal:  http://$(hostname -I 2>/dev/null | awk '{print $1}')$([ "$PORT" = "80" ] && echo "/" || echo ":$PORT/")"
-log "     (admin login: admin / admin generic default — change after first login)"
+if [ -n "${PORTAL_PASSWORD:-}" ]; then
+  log "     admin login: admin / $PORTAL_PASSWORD   (also in portal-credentials.txt)"
+  [ "${GENERATED_PW:-0}" = "1" ] && log "     ⚠ generated password — change it after first login (Users → reset pw)"
+else
+  log "     admin login: existing admin account (credentials unchanged)"
+fi
 log "  3. Sanity check:      ./bootstrap.sh --verify"

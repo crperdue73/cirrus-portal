@@ -424,26 +424,23 @@ users_have_admin() {
   grep -q '"role"[[:space:]]*:[[:space:]]*"admin"' "$USERS_FILE" 2>/dev/null
 }
 
-# Set the admin password through the real API (login → reset).
-set_admin_password() {
-  local old="$1" new="$2" tries=0
+# Verify an admin login works (fresh installs: the server seeds the password
+# at first boot from portal-config.json — there is no admin/admin anymore).
+verify_admin_login() {
+  local pw="$1" tries=0
   local jar; jar="$(mktemp)"
   local port_cfg; port_cfg="$(json_get "$CONFIG_FILE" port)"; port_cfg="${port_cfg:-$PORT}"
+  local rc=1
   while [ "$tries" -lt 10 ]; do
     tries=$((tries+1))
     if curl -s --max-time 5 -c "$jar" -H 'Content-Type: application/json' \
-        -d "{\"username\":\"admin\",\"password\":\"$old\"}" \
-        "http://127.0.0.1:$port_cfg/api/login" | grep -q '"authed":true\|"role"'; then
-      break
+        -d "{\"username\":\"admin\",\"password\":\"$pw\"}" \
+        "http://127.0.0.1:$port_cfg/api/login" | grep -q '"ok":true'; then
+      rc=0; break
     fi
     sleep 3
   done
-  if curl -s --max-time 5 -b "$jar" -H 'Content-Type: application/json' \
-      -d "{\"password\":\"$new\"}" \
-      "http://127.0.0.1:$port_cfg/api/users/admin/password" | grep -q '"ok":true\|"reset"'; then
-    rm -f "$jar"; return 0
-  fi
-  rm -f "$jar"; return 1
+  rm -f "$jar"; return "$rc"
 }
 
 run_install() {
@@ -457,7 +454,7 @@ run_install() {
     log "config:   port $cur_port, bind $BIND, gateway $GATEWAY_URL"
     log "token:    ${GATEWAY_TOKEN:+provided / auto-detected}${GATEWAY_TOKEN:-<will auto-detect from gateway config>}"
     log "actions:  write config ($([ "$FORCE_CONFIG" = "1" ] || [ ! -f "$CONFIG_FILE" ] && echo yes || echo no)) · wipe state ($([ "$FRESH" = "1" ] && echo yes || echo no))"
-    log "          build+start container · set admin password (fresh only) · approve device ($([ "$DO_APPROVE" = "1" ] && echo yes || echo no)) · firewall ($([ "$DO_FIREWALL" = "1" ] && echo yes || echo no))"
+    log "          build+start container · seed unique admin password (fresh only) · approve device ($([ "$DO_APPROVE" = "1" ] && echo yes || echo no)) · firewall ($([ "$DO_FIREWALL" = "1" ] && echo yes || echo no))"
     return 0
   fi
 
@@ -505,6 +502,12 @@ run_install() {
   if [ ! -f "$CONFIG_FILE" ] || [ "$FORCE_CONFIG" = "1" ]; then needs_config=1; fi
   if [ "$needs_config" = "1" ]; then
     umask 177
+    # No shipped default: mint a strong, unique admin password if none was
+    # given. The server seeds the admin account with this value on first boot.
+    if [ -z "$PORTAL_PASSWORD" ]; then
+      PORTAL_PASSWORD="$(gen_password)"
+      info "generated a strong unique admin password for first-run seeding"
+    fi
     cat > "$CONFIG_FILE" <<EOF
 {
   "port": $PORT,
@@ -518,7 +521,7 @@ run_install() {
       "enabled": true
     }
   ],
-  "portalPassword": "",
+  "portalPassword": "$PORTAL_PASSWORD",
   "sessionTtlHours": $SESSION_TTL_HOURS
 }
 EOF
@@ -537,6 +540,10 @@ EOF
   chmod 600 "$CRED_FILE" "$LOG_FILE" 2>/dev/null || true
 
   # ── build + start ───────────────────────────────────────────────────────
+  # Remember whether an admin already existed; a fresh boot seeds one from
+  # portal-config.json's portalPassword (unique) instead of a shipped default.
+  local had_admin_before=0
+  users_have_admin && had_admin_before=1
   log "building and starting the container…"
   compose up -d --build
   ok "container started"
@@ -553,30 +560,37 @@ EOF
   done
   [ "$up" = "1" ] && ok "portal is up (HTTP $code)" || warn "portal not answering yet — check: docker compose logs"
 
-  # ── admin password (fresh installs only) ────────────────────────────────
+  # ── admin password (fresh installs) ─────────────────────────────────────
+  # The server seeds the admin account on first boot using portalPassword from
+  # portal-config.json (a unique value we generated above). No admin/admin.
   local admin_pw=""
-  if ! users_have_admin; then
-    admin_pw="$PORTAL_PASSWORD"
-    if [ -z "$admin_pw" ]; then
-      admin_pw="$(gen_password)"
-      info "generated a strong random admin password"
-    fi
-    if set_admin_password "admin" "$admin_pw"; then
-      ok "admin password set (fresh install)"
+  if [ "$had_admin_before" = "0" ]; then
+    admin_pw="$(json_get "$CONFIG_FILE" portalPassword)"
+    [ -z "$admin_pw" ] && admin_pw="$PORTAL_PASSWORD"
+    if [ -n "$admin_pw" ] && verify_admin_login "$admin_pw"; then
+      ok "admin login verified (fresh install — seeded from config)"
     else
-      warn "could not set admin password via API — the seed default (admin / admin) may still be active. CHANGE IT."
-      warn "  manual: log in as admin/admin → Users → reset pw, or PORTAL_PASSWORD=... ./install.sh install --fresh --force-config"
+      # Server may have generated a random one (config lacked a password).
+      if [ -f portal-first-run.txt ]; then
+        admin_pw="$(grep -m1 '^password:' portal-first-run.txt | awk '{print $2}')"
+        ok "admin password read from portal-first-run.txt"
+      else
+        admin_pw=""
+        warn "could not verify the admin login — check 'docker compose logs'; reset via Users → reset pw once you're in."
+      fi
     fi
-    umask 177
-    cat > "$CRED_FILE" <<EOF
+    if [ -n "$admin_pw" ]; then
+      umask 177
+      cat > "$CRED_FILE" <<EOF
 # $APP_NAME — install credentials  ($(date -Is))
 url:      http://$(hostname -I 2>/dev/null | awk '{print $1}'):$port_cfg/
 user:     admin
 password: $admin_pw
 gateway:  $GATEWAY_URL
 EOF
-    chmod 600 "$CRED_FILE"
-    info "credentials saved to $CRED_FILE (0600)"
+      chmod 600 "$CRED_FILE"
+      info "credentials saved to $CRED_FILE (0600) — change the password after first login"
+    fi
   else
     info "admin account already exists — leaving credentials untouched"
   fi

@@ -516,7 +516,7 @@
     <input type="text" id="loginUser" placeholder="Username" autocomplete="username">
     <input type="password" id="loginPass" placeholder="Password" autocomplete="current-password">
     <button id="loginBtn">Enter</button>
-    <div class="login-hint" id="loginHint">First time? The generic admin login is <code>admin</code> / <code>admin</code> — change it after you sign in (Users → reset pw).</div>
+    <div class="login-hint" id="loginHint">Need an account? Ask your portal admin — there is no default login. On a fresh install the admin password is in <code>portal-credentials.txt</code> (or <code>portal-first-run.txt</code>) on the server.</div>
     <div class="login-err" id="loginErr"></div>
   </div>
 </div>
@@ -1407,7 +1407,7 @@ async function refreshUsersTable() {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: pw }),
       });
       toast('Password reset for ' + b.dataset.u, true);
-      // If the generic admin just changed their own password, drop the nag banner.
+      // If an admin just moved off a known-default password, drop the nag banner.
       const me = await api('/api/me');
       if (me && !me.defaultCreds) {
         const nag = $('defaultCredsBanner');

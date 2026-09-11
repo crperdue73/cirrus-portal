@@ -238,24 +238,18 @@ them** — enforced server-side on every endpoint (agents/history/send/abort/str
 
 Accounts live in `portal-users.json` (scrypt-hashed, chmod 600, bind-mounted).
 
-**Generic-login convention (Aug 18 2026):** every deployment ships with the
-SAME default admin credential so you can get in on day one — then you change
-it. The login screen shows the hint and a red banner nags until you do.
+**No default credentials.** Fresh installs mint a single `admin` account with a
+strong, unique password — never a shared one:
 
-```
-admin      / admin                 (role: admin — GENERIC DEFAULT, change it!)
-```
+- provide it yourself with `PORTAL_PASSWORD=...` (installer/bootstrap), or
+- let the server generate one; it is written to `portal-first-run.txt` (0600)
+on first boot and echoed to `portal-credentials.txt` by the installer.
 
-Change it after first login via **Users → reset pw**, or by re-running
-`PORTAL_PASSWORD=... ./bootstrap.sh --force-config`. Demo accounts are seeded
-on fresh installs (delete them before real use):
+Change it after first login via **Users → reset pw**. No demo accounts are
+shipped. The server **refuses to start** if an admin account still uses a
+known-default password (`admin`, `password`, `perdue-portal-2026`, …); a
+dev-only escape hatch is `PORTAL_ALLOW_INSECURE_DEFAULTS=1`.
 
-```
-instructor / instructor-demo     (role: instructor)
-student    / student-demo        (role: student — assigned willow, ethan)
-```
-
-If no admin exists, the server bootstraps `admin` with the generic password.
 Every login/send/abort/account change is appended to `portal-audit.log`
 (admins can browse it in the UI).
 
@@ -282,7 +276,7 @@ Browser ──HTTP/SSE──▶ portal-server.js ──WebSocket (loopback)─�
 | `portal.html` | The whole UI — single file, vanilla JS, dark theme |
 | `portal-config.json` | Port, bind, gateway URL, gateway token, portal password |
 | `portal-device.json` | Persistent device identity (auto-generated, chmod 600) |
-| `portal-users.json` | Local accounts + roles (auto-seeded, chmod 600) |
+| `portal-users.json` | Local accounts + roles (first admin auto-created with a unique password, chmod 600) |
 | `portal-audit.log` | Append-only audit trail (logins, sends, account changes) |
 | `portal-context.json` | CI30 course + per-user context store (chmod 600) |
 | `portal.log` | Runtime log |
@@ -296,7 +290,7 @@ Browser ──HTTP/SSE──▶ portal-server.js ──WebSocket (loopback)─�
   "gateways": [
     { "id": "home", "name": "Home", "url": "ws://127.0.0.1:18790", "token": "<gateway auth token>", "enabled": true }
   ],
-  "portalPassword": "<browser login password>",
+  "portalPassword": "<first-run admin password — seeds the admin account once>",
   "sessionTtlHours": 12
 }
 ```

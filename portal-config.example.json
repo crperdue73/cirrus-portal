@@ -10,6 +10,6 @@
       "enabled": true
     }
   ],
-  "portalPassword": "REPLACE_ME",
+  "portalPassword": "REPLACE_WITH_A_STRONG_UNIQUE_ADMIN_PASSWORD",
   "sessionTtlHours": 12
 }
