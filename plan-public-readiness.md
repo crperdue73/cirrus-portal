@@ -318,3 +318,15 @@
   `docker rm -f agent-portal`, then `./install.sh upgrade`. (The installer now warns about this in preflight
   and in `upgrade`.) No live deploy this run. The legacy systemd unit `agent-portal.service` is intentionally
   left as-is (renaming a live unit is a separate ops step).
+- **2026-09-11** — ⛔ **BLOCKED: Item 11 (License + legal) — needs Dad's decision.** Ran the item's first
+  step ("check the family/Cirrus licensing model"): **no model exists** anywhere in the family work I can see
+  (`MEMORY.md`, `cirrus/core-aurora-contract-v1.md`, `cirrus/grant-readiness/*`, the Cirrus strategy doc /
+  developer brief in vivi's workspace, `todo.md`) — and there is no `LICENSE`/copyright/SPDX text in the repo at
+  all. The family's "License Platform" domain is a *product feature* (annual tokens/entitlements), not a software
+  license for the portal. Choosing the public license and approving legal terms for **CRPerdue Technologies, LLC**
+  is a company decision, so **no `LICENSE`/terms were authored this run** and the box is **not ticked**.
+  **Decision needed from Dad:** (1) which license for the v3.0.0 public release — proprietary /
+  all-rights-reserved (fits a commercial product whose forked-OSS parts are branded as native modules) vs. an
+  OSS license (MIT / Apache-2.0 / AGPL); (2) the copyright-holder line (`© 2026 CRPerdue Technologies, LLC`?);
+  (3) approval to publish `SECURITY.md` (disclosure policy), third-party notices, and acceptable-use terms for
+  public hosts. Once decided, this item is a small, mostly-mechanical change set.
