@@ -63,7 +63,7 @@
   install). Define supported platforms/requirements and explicitly-listed
   unsupported setups so expectations are set before people deploy.
 
-- [ ] **10. Public installer v3.**
+- [x] **10. Public installer v3.** ✅ 2026-09-11
   Extend `install.sh`: `--domain`, `--tls`, `--public`, non-interactive flags,
   rollback on failure, extended preflight (DNS, TLS reachability, firewall, port),
   and a `--dry-run` that prints the exact plan.
@@ -284,3 +284,37 @@
   repo **and** the built tarball (`--tar`). Commit `485beee`.
   **Note:** docs-only item — no code/runtime change, no live deploy, nothing to do in a quiet window. The
   item-10 installer rename and item-12 public docs set will build on this model.
+- **2026-09-11** — ✅ **Item 10 done.** Public installer v3. `install.sh` gained **`--tls`** (require TLS),
+  **`--public`** (wildcard `0.0.0.0` bind — still bound by the TLS gate: needs `--domain`/certs or, for a
+  trusted LAN only, `--insecure-plaintext`), and **`--non-interactive`** (alias of `-y`; sets `YES=1`);
+  **`--dry-run` is now Docker-free** and prints an exact numbered install plan (config/secrets/tls/state/
+  ownership/build/checks/admin/caddy/approve/firewall). Added **rollback-on-failure**: before any
+  mutation the installer snapshots config+secrets+state (`snapshot_state`), arms an `ERR` trap, and on
+  failure restores the exact pre-install files + removes a freshly-built container (`rollback_now` /
+  `on_install_error`); success disarms it (`rollback_done`). Added **`set -E`** so the `ERR` trap reaches
+  nested functions (without it the trap silently never fired — caught by the new test). **Extended
+  preflight:** DNS resolution for `--domain` (`preflight_dns`, `PORTAL_SKIP_DNS_CHECK=1` escape hatch),
+  TLS:443 reachability (`preflight_tls_reachable`), firewall posture (`preflight_firewall`), on top of the
+  existing OS/disk/port/token checks. **Slug rename** `agent-portal` → **`cirrus-portal`** across
+  `install.sh` (`CONTAINER_NAME`), `docker-compose.yml` (service + `container_name` + project `name:`),
+  `release.sh` (`PKG` → `cirrus-portal-<ver>`), `bootstrap.sh` (`--verify` lists both), `portal-server.js`
+  (userAgent), README/REPLICATION — with the legacy `agent-portal` container still detected
+  (`LEGACY_CONTAINER_NAME`) so `status`/`doctor` keep working on un-migrated boxes. **Two real bugs fixed
+  en route:** (1) `publicBind` was emitted by a broken `[ is_loopback_bind "$BIND" ]` test that always
+  wrote `true` — now correct in `install.sh` **and** `bootstrap.sh`; (2) the `--help` heredoc executed a
+  backticked `--insecure-plaintext` as a command (stderr noise) — backticks removed. Evidence: `bash -n`
+  (install/bootstrap/release/secret-scan) + `node --check` clean; new **`test-installer.js` 8/8** (flags ·
+  rollback wiring · preflight fns · slug+legacy detection · dry-run prints plan + exits 0 **with no Docker**
+  + leaves config byte-identical · `--public` w/o TLS refused · `--tls` w/o cert refused · clean `--help` ·
+  **fake-docker rollback** restores the exact pre-install config); regressions green: `test-credentials` 3/3,
+  `test-secrets` 3/3, `test-setup` 3/3, `test-tls` 6/6, `test-network` 6/6 (F assertion updated to the
+  corrected `publicBind` form), `test-auth` 5/5, `test-container` 6/6, `test-docs` 5/5; `secret-scan.sh`
+  clean on the repo **and** the freshly built `dist/cirrus-portal-2.2.0.tar.gz`; live `./install.sh status`
+  on this box still reports the legacy `agent-portal` container via the new legacy detection (all checks
+  passed). Commit `d574b55`.
+  **FOLLOW-UP (quiet window + Dad's OK):** the LIVE box still runs the container named `agent-portal`. The
+  rename takes effect on the next `compose up -d --build`, which would otherwise create a SECOND container
+  (`cirrus-portal`) that clashes on host port 18800 — so before that rebuild, stop the old one:
+  `docker rm -f agent-portal`, then `./install.sh upgrade`. (The installer now warns about this in preflight
+  and in `upgrade`.) No live deploy this run. The legacy systemd unit `agent-portal.service` is intentionally
+  left as-is (renaming a live unit is a separate ops step).
