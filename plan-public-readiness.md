@@ -27,7 +27,7 @@
   not ship, and the login screen must never advertise a default. Add a startup
   guard that refuses to run on a known-default credential.
 
-- [ ] **3. Secrets at rest + leak guards.**
+- [x] **3. Secrets at rest + leak guards.** ✅ 2026-09-11
   Gateway tokens to a dedicated 0600 secrets file (or env-only), masked in every
   API response, never written to logs/backups/release tarballs. Add a
   `secret-scan.sh` that greps the repo + a built tarball for tokens/keys and runs
@@ -138,3 +138,20 @@
   still in the live `portal-users.json` (untracked). With the new guard, a rebuild/restart of
   the live container would now FAIL to boot until that admin password is rotated. Left untouched
   this run (no live deploy mid-day; rotating locks/alters real logins without Dad's OK).
+- **2026-09-11** — ✅ **Item 3 done.** Gateway tokens (and the bootstrap admin password) now live in a
+  dedicated **`portal-secrets.json` (0600)**, never in `portal-config.json`. Token precedence:
+  `PORTAL_GATEWAY_TOKEN_<ID>` env → secrets file → legacy config `token` (**auto-migrated on boot,
+  then stripped**) → `GATEWAY_TOKEN` env. `saveConfig()` is token-free; `/api/gateways` (GET/POST/PATCH)
+  returns only `hasToken`. Added **`secret-scan.sh`** (scans tracked repo files / a staged dir / a built
+  tarball for tokens, keys, device seeds, legacy shared secrets, and forbidden state files), wired into
+  `release.sh` (aborts the build on any finding) **and CI** (`.github/workflows/secret-scan.yml`;
+  full test/lint CI still lands in item 13). `install.sh`/`bootstrap.sh` now write token-free config +
+  the 0600 secrets file; **backups explicitly EXCLUDE secrets**; `doctor` checks the secrets mode and
+  that the config stayed token-free. Evidence: `node --check` + `bash -n` clean; new **`test-secrets.js`
+  3/3** (legacy token migrated+stripped; API masks tokens; API-set token → secrets; scanner flags a
+  planted token / repo clean); `test-credentials.js` still 3/3; `./secret-scan.sh` clean on the repo AND
+  on a freshly built `dist/agent-portal-2.2.0.tar.gz`. Commit `be4ccd8`.
+  **FOLLOW-UP (quiet window):** the LIVE box has no `portal-secrets.json` yet and `docker-compose.yml`
+  now bind-mounts it — before the next rebuild, create it (`printf '{}\n' > portal-secrets.json; chmod 600
+  portal-secrets.json`, which `install.sh` also does) or Docker will bind a directory; the live token
+  auto-migrates on first boot of the new code. No live deploy this run.
