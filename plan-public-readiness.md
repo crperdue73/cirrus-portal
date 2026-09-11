@@ -44,7 +44,7 @@
   80→443 redirect. Portal **refuses to bind publicly without TLS** unless
   `--insecure-plaintext` is explicitly passed.
 
-- [ ] **6. Auth hardening.**
+- [x] **6. Auth hardening.** ✅ 2026-09-11
   Login rate-limit + progressive lockout, CSRF tokens on all state-changing
   requests, session rotation on login, `logout-all`, configurable TTL, and a
   password policy (length + blocklist).
@@ -199,3 +199,23 @@
   TLS (`./install.sh install --domain …`, recommended) or an explicit `--insecure-plaintext`. No live
   deploy this run. (`reconnect-test.js` was already broken — stale marker — before this item; left for
   item 13.)
+- **2026-09-11** — ✅ **Item 6 done.** Auth hardening. Sessions now carry a 256-bit id **plus a
+  per-session CSRF secret**; absolute TTL is `sessionTtlHours`, optional idle expiry is the new
+  `sessionIdleMinutes`; **rotation on login** drops any session id that arrived with the request;
+  `destroyUserSessions()` backs **`POST /api/logout-all`** (new UI button) and runs on password
+  change/delete. **CSRF:** every state-changing request (`POST`/`PATCH`/`DELETE`) must send
+  `X-CSRF-Token` bound to the session, and a mismatched `Origin` is refused (`GET` reads unaffected;
+  login/setup exempt as they have no session). **Login:** progressive lockout per (IP|username) →
+  `429` + `Retry-After`, doubling per repeat (≤1h); new audit actions `login_throttled`/`csrf_reject`.
+  **Password policy** (12+ chars, upper/lower/number, not the username, not a known default, not on a
+  new common-password blocklist) is now enforced on user **create + reset**, not just the wizard.
+  Client `api()` attaches the CSRF header and captures the token; README/config example updated.
+  Evidence: `node --check` (+ `bash -n` on 4 scripts) clean; new **`test-auth.js` 5/5** (CSRF required
+  on writes, reads exempt, logout-all revokes + cross-origin refused · re-login rotates + kills the
+  old id · 5 bad logins → 429 w/ Retry-After and correct pw refused while locked · weak/short/
+  blocklisted pw rejected + reset revokes sessions · `sessionIdleMinutes` expires an idle session);
+  regressions green: `test-credentials.js` 3/3, `test-secrets.js` 3/3 (updated to send CSRF),
+  `test-setup.js` 3/3, `test-tls.js` 6/6, `secret-scan.sh` clean on the repo AND a freshly built
+  `dist/agent-portal-2.2.0.tar.gz`. Commit `bdc3053`.
+  **Note:** lockout state is in-memory (a restart clears it) and keyed per IP+username; durable/
+  shared-state lockout and the `ufw` helper remain for items 7/13. No live deploy this run.
