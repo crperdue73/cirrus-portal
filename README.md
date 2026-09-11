@@ -74,9 +74,12 @@ The portal can talk to **any number of OpenClaw gateway servers at once** and
 merge them into one agent list. This is how it works:
 
 - **Config** (`portal-config.json`): a `gateways` array —
-  `[{ id, name, url, token, enabled }]`. Legacy single `gatewayUrl`/
-  `gatewayToken` still works and is auto-synthesized into one entry, so
-  single-server deployments don't need to change anything.
+  `[{ id, name, url, enabled }]` (no token; see below). Legacy single
+  `gatewayUrl`/`gatewayToken` still works and is auto-synthesized into one
+  entry, so single-server deployments don't need to change anything.
+- **Secrets** (`portal-secrets.json`, 0600): `{ gatewayTokens: { <id>: token },
+  portalPassword }`. Tokens never appear in `portal-config.json`, API responses,
+  logs, backups, or release tarballs.
 - **Merged agent list:** `/api/agents` fans out `agents.list` to every
   connected gateway and tags each agent with its server (`server`, `serverName`,
   `ref: "gw:agent"`, `key: "agent:gw:agent:main"`). One server down = its
@@ -94,7 +97,7 @@ merge them into one agent list. This is how it works:
   owning server.
 - **Per-server ops:** each gateway must approve the portal device once
   (`openclaw devices approve`, or bootstrap `--approve`). Tokens live in the
-  chmod-600 config, browser never sees them.
+  chmod-600 `portal-secrets.json`, browser never sees them.
 - **Dev sandbox:** `portal-multi/` in the workspace has a mock gateway
   (`mock-gateway.js`, speaks the operator protocol) + e2e scripts used to
   prove the whole thing before touching the live portal.
@@ -124,8 +127,9 @@ editing, no portal restart:
   client (agents disappear from the list); enabling restarts it. The agent
   list and dashboard refresh automatically.
 - **Persistence:** changes are written back to `portal-config.json` (a `.bak`
-  is kept before each write). The container mount is read-write now, so the
-  running portal can save admin edits.
+  is kept before each write), with any token going to `portal-secrets.json`
+  (0600). The container mount is read-write now, so the running portal can save
+  admin edits.
 
 ### Live updates fix (Aug 2026) — no more manual refresh
 
@@ -274,29 +278,47 @@ Browser ──HTTP/SSE──▶ portal-server.js ──WebSocket (loopback)─�
 |---|---|
 | `portal-server.js` | Node 22+ server, zero dependencies (built-in `WebSocket` + `http`) |
 | `portal.html` | The whole UI — single file, vanilla JS, dark theme |
-| `portal-config.json` | Port, bind, gateway URL, gateway token, portal password |
+| `portal-config.json` | Port, bind, gateway URL/ids, session TTL — **TOKEN-FREE** (chmod 600) |
+| `portal-secrets.json` | Gateway token(s) + bootstrap admin password — **0600, never committed/backed up/shipped** (see `portal-secrets.example.json`) |
 | `portal-device.json` | Persistent device identity (auto-generated, chmod 600) |
 | `portal-users.json` | Local accounts + roles (first admin auto-created with a unique password, chmod 600) |
 | `portal-audit.log` | Append-only audit trail (logins, sends, account changes) |
 | `portal-context.json` | CI30 course + per-user context store (chmod 600) |
 | `portal.log` | Runtime log |
 
-## Config (`portal-config.json`)
+## Config (`portal-config.json`) — token-free
 
 ```json
 {
   "port": 18800,
   "bind": "0.0.0.0",
   "gateways": [
-    { "id": "home", "name": "Home", "url": "ws://127.0.0.1:18790", "token": "<gateway auth token>", "enabled": true }
+    { "id": "home", "name": "Home", "url": "ws://127.0.0.1:18790", "enabled": true }
   ],
-  "portalPassword": "<first-run admin password — seeds the admin account once>",
   "sessionTtlHours": 12
 }
 ```
 
+Gateway tokens and the first-run admin password do **not** live here — they live
+in `portal-secrets.json` (chmod 600), which is never committed, backed up, or
+shipped in a release tarball:
+
+```json
+{
+  "gatewayTokens": { "home": "<gateway auth token>" },
+  "portalPassword": "<first-run admin password — seeds the admin account once>"
+}
+```
+
+Token precedence per gateway: `PORTAL_GATEWAY_TOKEN_<ID>` env → `portal-secrets.json`
+→ legacy `portal-config.json` `token` (auto-migrated on boot, then stripped) →
+`GATEWAY_TOKEN` env. `./secret-scan.sh` (and CI) greps the repo + a built tarball
+for leaked tokens/keys/state files; `./install.sh doctor` checks the secrets file
+mode and that the config stayed token-free.
+
 Gateways can also be managed live from the UI (admin → Gateways) — see above.
-The file is written back on every change (with a `.bak` kept).
+The file is written back on every change (with a `.bak` kept); tokens are written
+to the secrets file instead.
 
 ## Docker deployment (current)
 

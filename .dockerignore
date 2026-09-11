@@ -1,5 +1,6 @@
 # Keep secrets and host artifacts out of the image
 portal-config.json
+portal-secrets.json
 portal-device.json
 portal-users.json
 portal-audit.log

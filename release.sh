@@ -36,6 +36,11 @@ FILES=(
   docker-compose.yml
   .dockerignore
   reconnect-test.js
+  branding.json
+  NAMING.md
+  portal-config.example.json
+  portal-secrets.example.json
+  secret-scan.sh
   README.md
   REPLICATION.md
   VERSION
@@ -59,12 +64,21 @@ done
 chmod +x "$STAGE/install.sh"
 
 # ── guard: no state files may leak into the package ────────────────────────
-LEAKS=("$STAGE/portal-config.json" "$STAGE/portal-device.json" "$STAGE/portal-users.json"
+LEAKS=("$STAGE/portal-config.json" "$STAGE/portal-secrets.json" "$STAGE/portal-secrets.json.tmp"
+       "$STAGE/portal-device.json" "$STAGE/portal-users.json"
        "$STAGE/portal-context.json" "$STAGE/portal-rooms.json" "$STAGE/portal-audit.log"
-       "$STAGE/portal-credentials.txt" "$STAGE/install.log" "$STAGE/portal.log")
+       "$STAGE/portal-credentials.txt" "$STAGE/portal-first-run.txt" "$STAGE/install.log" "$STAGE/portal.log")
 for l in "${LEAKS[@]}"; do
   [ -e "$l" ] && { echo "[release] ✗ STATE FILE WOULD LEAK: $l — aborting" >&2; exit 1; }
 done
+
+# ── guard: no secret VALUES in the staged payload (plan item 3) ────────────
+if [ -x "secret-scan.sh" ] || [ -f "secret-scan.sh" ]; then
+  if ! ./secret-scan.sh --dir "$STAGE"; then
+    echo "[release] ✗ secret-scan found secrets in the package — aborting" >&2
+    exit 1
+  fi
+fi
 
 # ── tar + checksums ────────────────────────────────────────────────────────
 mkdir -p dist

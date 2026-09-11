@@ -41,15 +41,17 @@ This doc is the runbook for standing it up on any number of servers.
 
 | File | What it holds | What happens on a fresh server |
 |---|---|---|
-| `portal-config.json` | Port, bind, **gateway token**, first-run admin password | Must be written per server — bootstrap.sh does it. |
+| `portal-config.json` | Port, bind, gateway URLs/ids (TOKEN-FREE) | Must be written per server — bootstrap.sh does it. |
+| `portal-secrets.json` | **Gateway token(s)** + first-run admin password (0600) | Must be written per server — bootstrap.sh does it. Never backed up or shipped. |
 | `portal-device.json` | Ed25519 device identity the gateway trusts | **Auto-generated** on first boot. The gateway must approve this *specific* device. Copying one from another box creates a duplicate identity and breaks the trust model. |
 | `portal-users.json` | Local accounts + roles | **First run only**: if no admin exists, one is minted with a unique password (from `portalPassword`, or generated → `portal-first-run.txt`). Never a shipped default. |
 | `portal-context.json` | CI30 course + per-user context | **Auto-seeded** with the default course store. |
 | `portal-rooms.json` | Group-chat rooms | Starts empty. |
 | `portal-audit.log` | Login/send/approval audit trail | Starts empty. |
 
-The server is built so that the **only file you must provide is
-`portal-config.json`** — everything else self-heals on first boot.
+The server is built so that the **only files you must provide are
+`portal-config.json` and `portal-secrets.json`** — everything else self-heals on
+first boot.
 
 ---
 
@@ -121,9 +123,9 @@ scp portal-server.js portal.html Dockerfile docker-compose.yml bootstrap.sh reco
     user@new-server:/opt/agent-portal/
 ```
 
-**Never** copy `portal-config.json`, `portal-device.json`, `portal-users.json`,
-`portal-context.json`, `portal-rooms.json`, or `portal-audit.log` from an
-existing install. They are per-server state (see §1).
+**Never** copy `portal-config.json`, `portal-secrets.json`, `portal-device.json`,
+`portal-users.json`, `portal-context.json`, `portal-rooms.json`, or
+`portal-audit.log` from an existing install. They are per-server state (see §1).
 
 ### 4.2 Point the gateway token at *this* server's gateway
 
@@ -144,9 +146,10 @@ that box). If it's unset, set it first:
 …and restart the gateway. The portal **must** present a token the gateway
 accepts, or the connect is rejected.
 
-`bootstrap.sh` writes `portal-config.json` (chmod 600) with the port, bind,
-gateway URL, token, and a portal password (generated and printed if you didn't
-pass one — **save it**, it's the admin login). It never overwrites an existing
+`bootstrap.sh` writes `portal-config.json` (chmod 600, **token-free**) with the
+port, bind and gateway URL, and `portal-secrets.json` (chmod 600) with the
+gateway token plus a portal password (generated and printed if you didn't pass
+one — **save it**, it's the admin login). It never overwrites an existing
 config unless you pass `--force-config`.
 
 It also **pre-creates the state files** (`portal-device.json`, `portal-users.json`,
@@ -278,6 +281,9 @@ away. If a bad deploy got in, restore the files and `docker compose up -d
   fresh code copy is a full restore, no re-approval needed as long as the
   gateway's paired-device store is also intact (it lives in the gateway's
   state dir, `~/.openclaw/nodes/paired.json` — back that up too).
+  `portal-secrets.json` is **deliberately excluded** from `install.sh backup`:
+  secrets never touch backups. Re-provide `GATEWAY_TOKEN=...` (or copy the
+  secrets file out-of-band) after a restore.
 - **CI/CD:** the whole flow is scriptable — `bootstrap.sh --fresh` +
   `--approve` + `--verify` are the three stages. `--fresh` is destructive by
   design, so gate it behind an explicit environment (staging only).

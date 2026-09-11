@@ -13,6 +13,9 @@ services:
       # but keep it stable across rebuilds).
       - ./portal-device.json:/app/portal-device.json
       - ./portal-config.json:/app/portal-config.json
+      # Gateway token(s) + bootstrap admin password (0600, never committed).
+      # Token-free portal-config.json + this file = the whole secret story.
+      - ./portal-secrets.json:/app/portal-secrets.json
       # Phase I: local accounts + audit log persist on the host
       - ./portal-users.json:/app/portal-users.json
       - ./portal-audit.log:/app/portal-audit.log

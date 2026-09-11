@@ -27,6 +27,7 @@ const crypto = require('crypto');
 // ── Config ────────────────────────────────────────────────────────────────
 const DIR = __dirname;
 const CONFIG_PATH = path.join(DIR, 'portal-config.json');
+const SECRETS_PATH = path.join(DIR, 'portal-secrets.json');
 const DEVICE_PATH = path.join(DIR, 'portal-device.json');
 const USERS_PATH = path.join(DIR, 'portal-users.json');
 const AUDIT_PATH = path.join(DIR, 'portal-audit.log');
@@ -98,7 +99,8 @@ function genStrongPassword(len = 24) {
 // First-run admin bootstrap secret: explicit env wins, then portal-config.json,
 // else generate a unique one.
 function resolveBootstrapPassword() {
-  const provided = process.env.PORTAL_ADMIN_PASSWORD || process.env.PORTAL_PASSWORD || CONFIG.portalPassword;
+  const provided = process.env.PORTAL_ADMIN_PASSWORD || process.env.PORTAL_PASSWORD
+    || (SECRETS && SECRETS.portalPassword) || CONFIG.portalPassword;
   if (provided && String(provided).trim()) return { password: String(provided).trim(), generated: false };
   return { password: genStrongPassword(), generated: true };
 }
@@ -168,6 +170,79 @@ function loadConfig() {
 
 const CONFIG = loadConfig();
 
+// ── Secrets at rest (plan item 3) ───────────────────────────────────────────
+// Gateway tokens (and the optional first-run bootstrap password) live in a
+// dedicated 0600 secrets file — NEVER in portal-config.json, API responses,
+// logs, backups, or release tarballs. Token precedence per gateway:
+//   1. env  PORTAL_GATEWAY_TOKEN_<ID>  (never persisted)
+//   2. portal-secrets.json  { gatewayTokens: { <id>: "<token>" } }
+//   3. legacy portal-config.json gateway.token  (migrated on boot, then stripped)
+//   4. env  GATEWAY_TOKEN               (single-gateway / one-liner deploys)
+function readSecrets() {
+  const out = { gatewayTokens: {}, portalPassword: '' };
+  try {
+    const raw = JSON.parse(fs.readFileSync(SECRETS_PATH, 'utf8'));
+    if (raw && typeof raw.gatewayTokens === 'object' && raw.gatewayTokens) {
+      for (const [k, v] of Object.entries(raw.gatewayTokens)) {
+        if (typeof v === 'string' && v) out.gatewayTokens[k] = v;
+      }
+    }
+    if (typeof raw.portalPassword === 'string') out.portalPassword = raw.portalPassword;
+  } catch (e) {
+    if (e && e.code !== 'ENOENT') console.warn('[portal] could not read portal-secrets.json:', e.message);
+  }
+  return out;
+}
+
+let SECRETS = readSecrets();
+
+function writeSecrets() {
+  try {
+    const tmp = SECRETS_PATH + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(SECRETS, null, 2), { mode: 0o600 });
+    try { fs.chmodSync(tmp, 0o600); } catch { /* best effort */ }
+    fs.renameSync(tmp, SECRETS_PATH);
+  } catch (e) {
+    console.error('[portal] failed to write portal-secrets.json:', e.message);
+  }
+}
+
+// env var name for a gateway id, e.g. "lab" -> PORTAL_GATEWAY_TOKEN_LAB
+function gatewayTokenEnv(id) {
+  return 'PORTAL_GATEWAY_TOKEN_' + String(id).toUpperCase().replace(/[^A-Z0-9]/g, '_');
+}
+
+function resolveGatewayToken(g, legacyToken) {
+  const env = process.env[gatewayTokenEnv(g.id)];
+  if (env && String(env).trim()) return { token: String(env).trim(), source: 'env:' + gatewayTokenEnv(g.id) };
+  if (SECRETS.gatewayTokens[g.id]) return { token: SECRETS.gatewayTokens[g.id], source: 'secrets' };
+  if (legacyToken && String(legacyToken).trim()) return { token: String(legacyToken).trim(), source: 'legacy-config' };
+  const fallback = process.env.GATEWAY_TOKEN;
+  if (fallback && String(fallback).trim()) return { token: String(fallback).trim(), source: 'env:GATEWAY_TOKEN' };
+  return { token: '', source: 'none' };
+}
+
+function isEnvTokenSource(source) { return String(source || '').startsWith('env'); }
+
+// Move any plaintext tokens found in the legacy config file into the secrets
+// file, then rewrite portal-config.json without them. Returns the count.
+function migrateLegacyTokens() {
+  let migrated = 0;
+  for (const g of CONFIG.gateways) {
+    if (g.token && g.tokenSource === 'legacy-config' && !SECRETS.gatewayTokens[g.id]) {
+      SECRETS.gatewayTokens[g.id] = g.token;
+      g.tokenSource = 'secrets';
+      migrated++;
+    }
+  }
+  if (migrated) {
+    writeSecrets();
+    saveConfig(); // rewrites portal-config.json with tokens stripped
+    console.warn(`[portal] migrated ${migrated} gateway token(s) out of portal-config.json into portal-secrets.json (0600)`);
+  }
+  return migrated;
+}
+
 // ── Gateway farm (multi-server, Aug 2026) ───────────────────────────────────
 // One portal, N OpenClaw gateway servers. Config: "gateways":
 //   [{ id, name, url, token, enabled }]
@@ -183,26 +258,56 @@ function normalizeGateways(cfg) {
         id: id || 'gw',
         name: String(g.name || id || 'Gateway'),
         url: g.url,
-        token: typeof g.token === 'string' ? g.token : '',
+        _legacyToken: typeof g.token === 'string' ? g.token : '',
         origin: typeof g.origin === 'string' ? g.origin : '',
         enabled: g.enabled !== false,
       });
     }
   }
   if (!list.length) {
-    list.push({ id: 'gw1', name: 'Gateway', url: cfg.gatewayUrl, token: cfg.gatewayToken, enabled: true });
+    list.push({ id: 'gw1', name: 'Gateway', url: cfg.gatewayUrl, _legacyToken: cfg.gatewayToken || '', enabled: true });
+  }
+  // Resolve each token from env → secrets → legacy config. The legacy field
+  // is dropped from the in-memory gateway so it can never be re-persisted.
+  for (const g of list) {
+    const r = resolveGatewayToken(g, g._legacyToken);
+    g.token = r.token;
+    g.tokenSource = r.source;
+    delete g._legacyToken;
   }
   // Keep disabled entries so the admin UI can re-enable them; the startup
   // loop only STARTS enabled ones.
   return list;
 }
 CONFIG.gateways = normalizeGateways(CONFIG);
+migrateLegacyTokens();
 
 // Persist the runtime config back to portal-config.json (gateway management
 // writes here; the file is bind-mounted read-write in docker-compose). Writes
-// a .bak first so a bad edit is never destructive.
+// a .bak first so a bad edit is never destructive. Tokens are NEVER written
+// here — they go to portal-secrets.json (0600) instead (plan item 3).
 function saveConfig() {
   try {
+    let secretsDirty = false;
+    // Keep the secrets store in sync with in-memory gateway tokens (new or
+    // edited gateways), except env-provided tokens which stay ephemeral.
+    for (const g of CONFIG.gateways) {
+      if (g.token && g.tokenSource !== 'secrets' && !isEnvTokenSource(g.tokenSource)) {
+        SECRETS.gatewayTokens[g.id] = g.token;
+        g.tokenSource = 'secrets';
+        secretsDirty = true;
+      }
+    }
+    // Drop secrets for gateways that no longer exist.
+    for (const id of Object.keys(SECRETS.gatewayTokens)) {
+      if (!CONFIG.gateways.some(g => g.id === id)) { delete SECRETS.gatewayTokens[id]; secretsDirty = true; }
+    }
+    if (CONFIG.portalPassword && CONFIG.portalPassword !== SECRETS.portalPassword) {
+      SECRETS.portalPassword = CONFIG.portalPassword;
+      secretsDirty = true;
+    }
+    if (secretsDirty) writeSecrets();
+
     const out = {
       port: CONFIG.port,
       bind: CONFIG.bind,
@@ -210,11 +315,10 @@ function saveConfig() {
         id: g.id,
         name: g.name,
         url: g.url,
-        token: typeof g.token === 'string' ? g.token : '',
         origin: typeof g.origin === 'string' && g.origin ? g.origin : undefined,
         enabled: g.enabled !== false,
+        // NOTE: no `token` here by design — see portal-secrets.json.
       })),
-      portalPassword: CONFIG.portalPassword,
       sessionTtlHours: CONFIG.sessionTtlHours,
     };
     if (fs.existsSync(CONFIG_PATH)) {
@@ -2128,14 +2232,15 @@ async function handleApi(req, res, url) {
       name: String(body.name || id).slice(0, 60),
       url,
       token: typeof body.token === 'string' ? body.token.trim() : '',
+      tokenSource: typeof body.token === 'string' && body.token.trim() ? 'runtime' : 'none',
       origin: typeof body.origin === 'string' ? String(body.origin).trim() : '',
       enabled: body.enabled !== false,
     };
     CONFIG.gateways.push(g);
-    saveConfig();
+    saveConfig(); // writes the token to portal-secrets.json (0600), not the config
     if (g.enabled) startGateway(g);
-    audit('gateway_add', user.username, user.role, { id, name: g.name, url, enabled: g.enabled });
-    return json(res, 200, { ok: true, gateway: { id: g.id, name: g.name, url: g.url, enabled: g.enabled, connected: false } });
+    audit('gateway_add', user.username, user.role, { id, name: g.name, url, enabled: g.enabled, hasToken: !!g.token });
+    return json(res, 200, { ok: true, gateway: { id: g.id, name: g.name, url: g.url, enabled: g.enabled, hasToken: !!g.token, connected: false } });
   }
 
   // PATCH /api/gateways/:id — edit name/url/token/origin/enabled
@@ -2153,10 +2258,10 @@ async function handleApi(req, res, url) {
     }
     if (typeof body.name === 'string' && body.name.trim()) g.name = String(body.name).trim().slice(0, 60);
     const tokenChanged = typeof body.token === 'string' && body.token.trim() && body.token.trim() !== g.token;
-    if (tokenChanged) g.token = String(body.token).trim();
+    if (tokenChanged) { g.token = String(body.token).trim(); g.tokenSource = 'runtime'; }
     if (typeof body.origin === 'string') g.origin = String(body.origin).trim();
     if (typeof body.enabled === 'boolean') g.enabled = body.enabled;
-    saveConfig();
+    saveConfig(); // token goes to portal-secrets.json (0600); config stays token-free
     // URL/token edits must reconnect now, even if the client is live.
     if (urlChanged || tokenChanged) {
       stopGateway(g.id);
@@ -2164,8 +2269,8 @@ async function handleApi(req, res, url) {
     } else {
       startOrRestartGateway(g);
     }
-    audit('gateway_update', user.username, user.role, { id, fields: Object.keys(body), enabled: g.enabled });
-    return json(res, 200, { ok: true, gateway: { id: g.id, name: g.name, url: g.url, enabled: g.enabled, connected: !!(GATEWAY_BY_ID.get(id) && GATEWAY_BY_ID.get(id).connected) } });
+    audit('gateway_update', user.username, user.role, { id, fields: Object.keys(body), enabled: g.enabled, tokenChanged });
+    return json(res, 200, { ok: true, gateway: { id: g.id, name: g.name, url: g.url, enabled: g.enabled, hasToken: !!g.token, connected: !!(GATEWAY_BY_ID.get(id) && GATEWAY_BY_ID.get(id).connected) } });
   }
 
   // DELETE /api/gateways/:id — remove entirely (config + client)
@@ -2175,7 +2280,7 @@ async function handleApi(req, res, url) {
     if (!CONFIG.gateways.some(x => x.id === id)) return json(res, 404, { error: 'no such gateway' });
     stopGateway(id);
     CONFIG.gateways = CONFIG.gateways.filter(x => x.id !== id);
-    saveConfig();
+    saveConfig(); // also prunes the gateway token from portal-secrets.json
     audit('gateway_remove', user.username, user.role, { id });
     return json(res, 200, { ok: true });
   }
@@ -2381,6 +2486,12 @@ server.listen(CONFIG.port, CONFIG.bind, () => {
   console.log(`   ${BRAND.family} · engine: ${BRAND.engine} · ${BRAND.slug}`);
   console.log(`   http://${CONFIG.bind}:${CONFIG.port}  (LAN: http://<this-host>:${CONFIG.port})`);
   for (const g of GATEWAYS) console.log(`   gateway ${g.id} (${g.name}): ${g.cfg.url}`);
+  {
+    const withTok = CONFIG.gateways.filter(g => g.token).length;
+    const envTok = CONFIG.gateways.filter(g => isEnvTokenSource(g.tokenSource)).length;
+    const src = fs.existsSync(SECRETS_PATH) ? 'portal-secrets.json (0600)' : 'env/none';
+    console.log(`   secrets: ${src} — ${withTok}/${CONFIG.gateways.length} gateway token(s)${envTok ? `, ${envTok} from env` : ''}`);
+  }
   console.log(`   device:  ${DEVICE.deviceId.slice(0, 12)}…`);
   console.log(`   users:   ${USERS.length} account(s) — ${USERS.filter(u => u.role === 'admin').length} admin, ${USERS.filter(u => u.role === 'instructor').length} instructor, ${USERS.filter(u => u.role === 'student').length} student`);
 });

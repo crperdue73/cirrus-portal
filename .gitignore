@@ -2,6 +2,8 @@
 portal-config.json
 portal-config.json.bak*
 portal-config.json.*
+portal-secrets.json
+portal-secrets.json.tmp
 portal-device.json
 portal-users.json
 portal-rooms.json
@@ -19,5 +21,6 @@ portal.log
 # ── Installer / release artifacts ──────────────────────────────────────────
 install.log
 portal-credentials.txt
+portal-first-run.txt
 backups/
 dist/

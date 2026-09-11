@@ -11,12 +11,11 @@
 #
 # Design rules (see REPLICATION.md):
 #   • Code files are copied; state files are NEVER copied between servers.
-#   • portal-config.json is written once per server (0600). Never clobbered
-#     unless --force-config is passed.
+#   • portal-config.json is written once per server (0600) and is TOKEN-FREE.
+#     The gateway token + bootstrap admin password live in portal-secrets.json
+#     (0600) — never in config, backups, or release tarballs.
 #   • portal-device.json is generated fresh per server by the app on first
 #     boot. --fresh deletes it so the gateway gets a clean device identity.
-#   • The gateway token in portal-config.json MUST equal the target server's
-#     own gateway token (gateway.auth.token). We never reuse another box's.
 # ═══════════════════════════════════════════════════════════════════════════
 set -euo pipefail
 
@@ -167,8 +166,8 @@ fi
 
 # ── fresh reset ─────────────────────────────────────────────────────────────
 if [ "$FRESH" = "1" ]; then
-  warn "wiping local state: device, users, rooms, audit, context, logs, credentials"
-  rm -f portal-device.json portal-users.json portal-rooms.json portal-context.json portal-audit.log portal.log portal-first-run.txt portal-credentials.txt
+  warn "wiping local state: device, users, rooms, audit, context, logs, credentials, secrets"
+  rm -f portal-device.json portal-users.json portal-rooms.json portal-context.json portal-audit.log portal.log portal-first-run.txt portal-credentials.txt portal-secrets.json
 fi
 
 # ── config ──────────────────────────────────────────────────────────────────
@@ -200,13 +199,23 @@ if [ ! -f "$CONFIG_FILE" ] || [ "$FORCE_CONFIG" = "1" ]; then
   "port": $PORT,
   "bind": "$BIND",
   "gatewayUrl": "$GATEWAY_URL",
-  "gatewayToken": "$GATEWAY_TOKEN",
-  "portalPassword": "$PORTAL_PASSWORD",
   "sessionTtlHours": $SESSION_TTL_HOURS
 }
 EOF
   chmod 600 "$CONFIG_FILE"
-  log "wrote $CONFIG_FILE (0600)"
+  log "wrote $CONFIG_FILE (0600 — token-free)"
+  # Gateway token + bootstrap admin password → dedicated 0600 secrets file
+  # (never in config/backups/tarballs). Legacy single-gateway id is "gw1".
+  cat > portal-secrets.json <<EOF
+{
+  "gatewayTokens": {
+    "gw1": "$GATEWAY_TOKEN"
+  },
+  "portalPassword": "$PORTAL_PASSWORD"
+}
+EOF
+  chmod 600 portal-secrets.json
+  log "wrote portal-secrets.json (0600) — gateway token + bootstrap admin password"
   # Save first-run credentials so the deployer can log in (0600).
   cat > portal-credentials.txt <<EOF
 # $APP_NAME — install credentials  ($(date -Is))
@@ -224,9 +233,9 @@ fi
 # Pre-create the bind-mounted state files so Docker mounts them as FILES.
 # A missing host path makes Docker create a DIRECTORY at that path, which
 # silently breaks the server's write-on-boot seeding (device/users/context).
-for f in portal-device.json portal-users.json portal-context.json portal-rooms.json portal-audit.log; do
+for f in portal-device.json portal-users.json portal-context.json portal-rooms.json portal-audit.log portal-secrets.json; do
   if [ ! -f "$f" ]; then
-    : > "$f"
+    if [ "$f" = "portal-secrets.json" ]; then printf '{}\n' > "$f"; else : > "$f"; fi
     chmod 600 "$f"
     log "pre-created $f"
   fi

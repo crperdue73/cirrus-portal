@@ -15,11 +15,12 @@
 #
 #  Design rules (see REPLICATION.md):
 #    • Code files are copied between servers; state files NEVER are.
-#    • portal-config.json is written once per server (0600). Never clobbered
-#      unless --force-config is passed.
+#    • portal-config.json is written once per server (0600) and is TOKEN-FREE.
+#      Gateway token(s) + the bootstrap admin password live in
+#      portal-secrets.json (0600) — never in config, backups, or tarballs.
 #    • portal-device.json is generated fresh per server by the app on first
 #      boot, and must be approved on THAT server's gateway.
-#    • The gateway token in portal-config.json MUST equal the target server's
+#    • The gateway token in portal-secrets.json MUST equal the target server's
 #      own gateway token (gateway.auth.token) — auto-detected when possible.
 #    • Idempotent: re-running install on a healthy box changes nothing
 #      except (optionally) rebuilding the image.
@@ -38,6 +39,7 @@ TAGLINE="${TAGLINE:-Mission control for your OpenClaw fleet.}"
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$DIR"
 CONFIG_FILE="portal-config.json"
+SECRETS_FILE="portal-secrets.json"
 DEVICE_FILE="portal-device.json"
 USERS_FILE="portal-users.json"
 CONTEXT_FILE="portal-context.json"
@@ -281,14 +283,23 @@ run_doctor() {
     local mode; mode="$(stat -c %a "$CONFIG_FILE" 2>/dev/null || echo '?')"
     ok "config present (mode $mode)"
     [ "$mode" = "600" ] || warn "config mode is $mode — expected 600"
-    if grep -q "REPLACE_WITH_GATEWAY_TOKEN\|REPLACE_ME" "$CONFIG_FILE" 2>/dev/null; then
-      warn "config still contains placeholder tokens"; fails=$((fails+1))
-    fi
-    if grep -q '"gatewayToken": ""' "$CONFIG_FILE" 2>/dev/null; then
-      warn "config gateway token is EMPTY — agents will not connect"; fails=$((fails+1))
+    if grep -q '"token"[[:space:]]*:[[:space:]]*"[^"]' "$CONFIG_FILE" 2>/dev/null; then
+      warn "config carries a plaintext token — expected token-free (use $SECRETS_FILE)"; fails=$((fails+1))
     fi
   else
     warn "no config — run ./install.sh install"; fails=$((fails+1))
+  fi
+  # secrets at rest (plan item 3) — gateway tokens never live in config
+  if [ -f "$SECRETS_FILE" ]; then
+    local smode; smode="$(stat -c %a "$SECRETS_FILE" 2>/dev/null || echo '?')"
+    if [ "$smode" = "600" ]; then ok "secrets present ($SECRETS_FILE, mode 600)"; else warn "secrets mode is $smode — expected 600"; fails=$((fails+1)); fi
+    if grep -q 'REPLACE_WITH_GATEWAY_TOKEN\|REPLACE_ME' "$SECRETS_FILE" 2>/dev/null; then
+      warn "secrets still contain placeholder tokens"; fails=$((fails+1))
+    fi
+  elif grep -q '"token"[[:space:]]*:[[:space:]]*"[^"]' "$CONFIG_FILE" 2>/dev/null; then
+    info "no secrets file yet — token still in config (server migrates it to $SECRETS_FILE on next boot)"
+  else
+    warn "no $SECRETS_FILE and no config token — gateway token missing"; fails=$((fails+1))
   fi
   # state files
   for f in "${STATE_FILES[@]}"; do
@@ -343,6 +354,8 @@ run_backup() {
   tar czf "$out" "${existing[@]}"
   chmod 600 "$out"
   ok "backup written: $out ($(du -h "$out" | cut -f1))"
+  info "note: gateway tokens are NOT in this backup — secrets never touch backups."
+  info "      After a restore, re-provide GATEWAY_TOKEN=... or copy $SECRETS_FILE separately."
   log "restore with: ./install.sh restore $out"
 }
 
@@ -383,7 +396,7 @@ run_uninstall() {
       read -r -p "DELETE all config, state and credentials in $DIR? This cannot be undone. [y/N] " ans
       case "$ans" in y|Y) ;; *) warn "purge aborted — files kept."; exit 0 ;; esac
     }
-    rm -f "$CONFIG_FILE" "${STATE_FILES[@]}" "$CRED_FILE" "$LOG_FILE"
+    rm -f "$CONFIG_FILE" "$SECRETS_FILE" "${STATE_FILES[@]}" "$CRED_FILE" "$LOG_FILE"
     ok "purged local files (code left in place)"
   else
     info "files kept. To also delete them: ./install.sh uninstall --purge -y"
@@ -461,7 +474,7 @@ run_install() {
   # ── fresh reset ─────────────────────────────────────────────────────────
   if [ "$FRESH" = "1" ]; then
     warn "wiping local state: device, users, rooms, audit, context, credentials"
-    rm -f "$DEVICE_FILE" "$USERS_FILE" "$CONTEXT_FILE" "$ROOMS_FILE" "$AUDIT_FILE" "$CRED_FILE"
+    rm -f "$DEVICE_FILE" "$USERS_FILE" "$CONTEXT_FILE" "$ROOMS_FILE" "$AUDIT_FILE" "$CRED_FILE" "$SECRETS_FILE"
   fi
 
   # ── preflight ───────────────────────────────────────────────────────────
@@ -517,16 +530,26 @@ run_install() {
       "id": "$GATEWAY_ID",
       "name": "$GATEWAY_NAME",
       "url": "$GATEWAY_URL",
-      "token": "$GATEWAY_TOKEN",
       "enabled": true
     }
   ],
-  "portalPassword": "$PORTAL_PASSWORD",
   "sessionTtlHours": $SESSION_TTL_HOURS
 }
 EOF
     chmod 600 "$CONFIG_FILE"
-    ok "wrote $CONFIG_FILE (0600, port $PORT)"
+    ok "wrote $CONFIG_FILE (0600, port $PORT — token-free)"
+    # Gateway token(s) + bootstrap admin password → dedicated 0600 secrets file.
+    # These never appear in config, backups, or release tarballs (plan item 3).
+    cat > "$SECRETS_FILE" <<EOF
+{
+  "gatewayTokens": {
+    "$GATEWAY_ID": "$GATEWAY_TOKEN"
+  },
+  "portalPassword": "$PORTAL_PASSWORD"
+}
+EOF
+    chmod 600 "$SECRETS_FILE"
+    ok "wrote $SECRETS_FILE (0600) — gateway token(s) + bootstrap admin password"
   else
     info "$CONFIG_FILE exists — keeping it"
   fi
@@ -535,8 +558,10 @@ EOF
   for f in "${STATE_FILES[@]}"; do
     if [ ! -e "$f" ]; then : > "$f"; chmod 600 "$f"; info "pre-created $f"; fi
   done
+  # Secrets file must exist as a FILE too (Docker would otherwise mount a dir).
+  if [ ! -e "$SECRETS_FILE" ]; then printf '{}\n' > "$SECRETS_FILE"; chmod 600 "$SECRETS_FILE"; info "pre-created $SECRETS_FILE"; fi
   # ── harden permissions (idempotent; keeps secrets root-only) ────────────
-  chmod 600 "$CONFIG_FILE" "${STATE_FILES[@]}" 2>/dev/null || true
+  chmod 600 "$CONFIG_FILE" "$SECRETS_FILE" "${STATE_FILES[@]}" 2>/dev/null || true
   chmod 600 "$CRED_FILE" "$LOG_FILE" 2>/dev/null || true
 
   # ── build + start ───────────────────────────────────────────────────────
@@ -565,7 +590,8 @@ EOF
   # portal-config.json (a unique value we generated above). No admin/admin.
   local admin_pw=""
   if [ "$had_admin_before" = "0" ]; then
-    admin_pw="$(json_get "$CONFIG_FILE" portalPassword)"
+    admin_pw="$(json_get "$SECRETS_FILE" portalPassword 2>/dev/null)"
+    [ -z "$admin_pw" ] && admin_pw="$(json_get "$CONFIG_FILE" portalPassword 2>/dev/null)"
     [ -z "$admin_pw" ] && admin_pw="$PORTAL_PASSWORD"
     if [ -n "$admin_pw" ] && verify_admin_login "$admin_pw"; then
       ok "admin login verified (fresh install — seeded from config)"
