@@ -21,7 +21,7 @@
   code/installer/docs, and fix the version drift (VERSION file `2.2.0` vs
   `install.sh` `2.1.0`).
 
-- [ ] **2. Kill all default and shared credentials.**
+- [x] **2. Kill all default and shared credentials.** ✅ 2026-09-11
   No shipped `admin`/`admin`; no shared `perdue-portal-2026`. Fresh installs must
   generate a unique admin password (or force first-run creation), demo users must
   not ship, and the login screen must never advertise a default. Add a startup
@@ -121,3 +121,20 @@
   and verified: title `Cirrus Portal`, `/` 200, both gateways connected, `install.sh status`
   all-checks-passed. Left for later items: container/compose/service name still `agent-portal`
   (rename belongs with installer v3, item 10, to keep it a coordinated deploy).
+- **2026-09-11** — ✅ **Item 2 done.** Removed the shipped `admin`/`admin` bootstrap:
+  `loadUsers()` now mints the first admin with a unique password from
+  `PORTAL_ADMIN_PASSWORD`/`PORTAL_PASSWORD`/`portal-config.json`, else generates one →
+  `portal-first-run.txt` (0600); added `assertNoDefaultCreds()` that **refuses to boot**
+  when an admin uses a known-default password (`admin`, `password`, `perdue-portal-2026`,
+  demo creds…), overridable only by `PORTAL_ALLOW_INSECURE_DEFAULTS=1` (dev). Login screen
+  no longer advertises a default; `install.sh`/`bootstrap.sh` seed+save a unique password
+  to `portal-credentials.txt` (0600) and assert no demo users ship; README/REPLICATION/example
+  config updated. Evidence: `node --check` + `bash -n` clean; new `test-credentials.js`
+  **3/3 passed** (fresh-mint unique ≠ admin; guard refuses on admin/admin; override boots).
+  Commit `f562469` (plan record for item 1: `e145f5d`).
+  **FOLLOW-UP (needs a quiet window + Dad's awareness before the next rebuild):** the LIVE
+  box still runs the legacy `admin`/`admin` login and its `portal-config.json` still carries the
+  shared `portalPassword: "perdue-portal-2026"`; demo `instructor`/`student` accounts are also
+  still in the live `portal-users.json` (untracked). With the new guard, a rebuild/restart of
+  the live container would now FAIL to boot until that admin password is rotated. Left untouched
+  this run (no live deploy mid-day; rotating locks/alters real logins without Dad's OK).
