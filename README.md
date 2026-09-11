@@ -428,7 +428,15 @@ docker compose down              # stop
 - Env overrides: `GATEWAY_URL`, `GATEWAY_TOKEN`, `PORTAL_PASSWORD`,
   `SESSION_TTL_HOURS`, `RECONNECT_BASE_MS`, `RECONNECT_MAX_MS` (via
   `docker run -e`; the compose file deliberately sets none).
-- Runs with `cap_drop: ALL` + `no-new-privileges`.
+- **Container hardening (Sep 2026):** the image is pinned by base-image digest
+  (`node:22-alpine@sha256:…`) and runs as the unprivileged `portal` user
+  (`uid:gid 10001`). Compose adds `read_only: true` (state lives on the bind
+  mounts; `/tmp` is a small tmpfs), `cap_drop: ALL`, `no-new-privileges`,
+  `mem_limit: 512m`, `cpus: "1.0"`, `pids_limit: 256`, and a container
+  `HEALTHCHECK` (`healthcheck.js` → loopback `GET /`).
+- **Ownership:** because the runtime is non-root, the bind-mounted state files
+  must be owned by `10001:10001` — `install.sh`/`bootstrap.sh` chown them for
+  you, and `./install.sh doctor` flags it if they drift.
 - The old systemd unit (`agent-portal.service`) is kept but **disabled** as a fallback.
 
 ## Service management (old systemd path, fallback)

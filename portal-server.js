@@ -351,12 +351,28 @@ function readSecrets() {
 
 let SECRETS = readSecrets();
 
+// Atomic write that also survives a read-only image rootfs (plan item 8): the
+// temp sibling lives on the container rootfs, which is read-only, but the
+// target is a bind-mounted file — so fall back to writing it in place.
+function writeFileRobust(file, data, mode) {
+  const tmp = file + '.tmp';
+  try {
+    fs.writeFileSync(tmp, data, { mode });
+    try { fs.chmodSync(tmp, mode); } catch { /* best effort */ }
+    fs.renameSync(tmp, file);
+    return;
+  } catch (e) {
+    // Read-only rootfs (EROFS), cross-device (EXDEV), perms, or any other
+    // reason the staged temp/rename can't work — drop it and write the target.
+    try { fs.rmSync(tmp, { force: true, recursive: true }); } catch { /* nothing staged */ }
+  }
+  fs.writeFileSync(file, data, { mode });
+  try { fs.chmodSync(file, mode); } catch { /* best effort */ }
+}
+
 function writeSecrets() {
   try {
-    const tmp = SECRETS_PATH + '.tmp';
-    fs.writeFileSync(tmp, JSON.stringify(SECRETS, null, 2), { mode: 0o600 });
-    try { fs.chmodSync(tmp, 0o600); } catch { /* best effort */ }
-    fs.renameSync(tmp, SECRETS_PATH);
+    writeFileRobust(SECRETS_PATH, JSON.stringify(SECRETS, null, 2), 0o600);
   } catch (e) {
     console.error('[portal] failed to write portal-secrets.json:', e.message);
   }

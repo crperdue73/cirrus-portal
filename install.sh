@@ -49,6 +49,11 @@ LOG_FILE="install.log"
 CRED_FILE="portal-credentials.txt"
 STATE_FILES=("$DEVICE_FILE" "$USERS_FILE" "$CONTEXT_FILE" "$ROOMS_FILE" "$AUDIT_FILE")
 CONTAINER_NAME="agent-portal"
+# Container runtime uid:gid — MUST match the Dockerfile's ARG PORTAL_UID/GID
+# (plan item 8). Host bind-mounts are shared with the container, so the state
+# files must be owned by this id or the non-root server can't read/write them.
+PORTAL_UID="${PORTAL_UID:-10001}"
+PORTAL_GID="${PORTAL_GID:-10001}"
 GATEWAY_HOST="127.0.0.1"
 GATEWAY_PORT="18790"
 
@@ -194,6 +199,25 @@ detect_docker() {
 
 docker_ps()  { "${SUDO_CMD[@]}" docker ps --filter "name=$CONTAINER_NAME" "$@"; }
 compose()    { "${SUDO_CMD[@]}" docker compose "$@"; }
+
+# Run a command as root: directly when we already are, else via the detected
+# sudo. Returns 127 when neither is available.
+run_as_root() {
+  if [ "$(id -u)" = "0" ]; then "$@"
+  elif [ "${#SUDO_CMD[@]}" -gt 0 ]; then "${SUDO_CMD[@]}" "$@"
+  else return 127; fi
+}
+
+# Own the bind-mounted state by the container's uid:gid (plan item 8 — the
+# image runs non-root). Best-effort: warn loudly if we can't.
+chown_state_to_container() {
+  if run_as_root chown "$PORTAL_UID:$PORTAL_GID" \
+       "$CONFIG_FILE" "$SECRETS_FILE" "${STATE_FILES[@]}" 2>/dev/null; then
+    ok "state files owned by container user $PORTAL_UID:$PORTAL_GID"
+  else
+    warn "could not chown state files to $PORTAL_UID:$PORTAL_GID (need root) — the non-root container may be unable to read/write them"
+  fi
+}
 
 # Read a JSON value portably (python3 → node → grep fallback).
 json_get() { # json_get FILE key
@@ -406,6 +430,21 @@ run_doctor() {
   for f in "${STATE_FILES[@]}"; do
     [ -e "$f" ] || warn "state file missing: $f"
   done
+  # container ownership (plan item 8) — the image runs non-root (uid:gid 10001),
+  # so bind-mounted state must be owned by that id.
+  {
+    local badown=0
+    for f in "$CONFIG_FILE" "$SECRETS_FILE" "${STATE_FILES[@]}"; do
+      [ -e "$f" ] || continue
+      local o; o="$(stat -c '%u:%g' "$f" 2>/dev/null || echo '?')"
+      [ "$o" = "$PORTAL_UID:$PORTAL_GID" ] || badown=1
+    done
+    if [ "$badown" = "1" ]; then
+      warn "state files not owned by container user $PORTAL_UID:$PORTAL_GID — a non-root container will fail (re-run: ./install.sh install)"
+    else
+      ok "state files owned by container user $PORTAL_UID:$PORTAL_GID"
+    fi
+  }
   # container + logs
   if docker_ps --format '{{.Names}}' | grep -q "$CONTAINER_NAME"; then
     ok "container running"
@@ -787,6 +826,8 @@ EOF
   # ── harden permissions (idempotent; keeps secrets root-only) ────────────
   chmod 600 "$CONFIG_FILE" "$SECRETS_FILE" "${STATE_FILES[@]}" 2>/dev/null || true
   chmod 600 "$CRED_FILE" "$LOG_FILE" 2>/dev/null || true
+  # The image runs non-root (plan item 8) — hand the bind-mounted state to it.
+  chown_state_to_container
 
   # ── build + start ───────────────────────────────────────────────────────
   # Remember whether an admin already existed; a fresh boot seeds one from

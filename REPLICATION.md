@@ -32,7 +32,7 @@ This doc is the runbook for standing it up on any number of servers.
 | `portal-server.js` | The whole server. Zero npm dependencies (Node 22 built-ins only). |
 | `portal.html` | The whole UI. Single file, vanilla JS. |
 | `Dockerfile` | Build recipe. |
-| `docker-compose.yml` | Runtime recipe (host networking, bind mounts, hardening). |
+| `docker-compose.yml` | Runtime recipe (host networking, bind mounts, non-root/read-only hardening). |
 | `install.sh` | The professional installer (v2.1.0 — preflight, auto-detect, hardening, backup/restore). |
 | `bootstrap.sh` | Legacy installer (still works, superseded by `install.sh`). |
 | `reconnect-test.js` | Optional regression test. |
@@ -204,7 +204,24 @@ The gateway sees a **new, unapproved device** → creates a pending pairing
 request. The portal keeps retrying with exponential backoff (1s → 30s) until
 it's approved — no restart needed after approval.
 
-### 4.4 Approve the device (the only manual step)
+### 4.4 Container hardening (non-root + read-only)
+
+As of the v3 hardening pass (plan item 8) the image:
+
+- runs as the unprivileged `portal` user (`uid:gid 10001`) — never root;
+- is built `FROM` a **digest-pinned** base image;
+- ships a `HEALTHCHECK` (`healthcheck.js`, loopback `GET /`);
+- runs with `read_only: true`, a size-capped `/tmp` tmpfs, `cap_drop: ALL`,
+  `no-new-privileges`, and cpu/mem/pid limits (see `docker-compose.yml`).
+
+Because the runtime is non-root, the **bind-mounted state** (`portal-config.json`,
+`portal-secrets.json`, `portal-device.json`, `portal-users.json`,
+`portal-context.json`, `portal-rooms.json`, `portal-audit.log`) must be owned by
+`10001:10001`. `install.sh` and `bootstrap.sh` chown it automatically; if you
+built the image with a different `--build-arg PORTAL_UID/PORTAL_GID`, chown to
+match. `./install.sh doctor` reports ownership drift.
+
+### 4.5 Approve the device (the only manual step)
 
 ```bash
 openclaw devices list          # find the pending request
@@ -225,7 +242,7 @@ Approve with those scopes granted. If the device was approved for fewer scopes
 and staff see a banner in the UI — and a scope-upgrade request appears in
 `openclaw devices list` that you can approve the same way.
 
-### 4.5 Verify
+### 4.6 Verify
 
 ```bash
 ./bootstrap.sh --verify

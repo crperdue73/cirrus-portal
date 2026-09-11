@@ -32,6 +32,17 @@ services:
     #   PORTAL_TLS_MODE / PORTAL_TLS_CERT / PORTAL_TLS_KEY / PORTAL_TRUST_PROXY
     #   PORTAL_PUBLIC_BIND=1        (opt in to a non-loopback bind — default is loopback)
     #   PORTAL_INSECURE_PLAINTEXT=1 (allow a cleartext PUBLIC bind — LAN/tunnel only)
+    #
+    # ── Container hardening (plan item 8) ─────────────────────────────────
+    # The image runs as the unprivileged portal user (uid:gid 10001), so the
+    # bind-mounted state above must be OWNED by 10001:10001 (install.sh /
+    # bootstrap.sh chown it; see docs). These controls back that up:
+    read_only: true            # immutable image rootfs; state lives on the mounts
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    mem_limit: 512m            # portal idles ~30 MB; raise for large fleets
+    cpus: "1.0"               # one core is ample for the console
+    pids_limit: 256            # fork-bomb guard
     security_opt:
       - no-new-privileges:true
     cap_drop:

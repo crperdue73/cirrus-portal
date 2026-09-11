@@ -275,6 +275,21 @@ for f in portal-device.json portal-users.json portal-context.json portal-rooms.j
   fi
 done
 
+# ── container ownership (plan item 8) ───────────────────────────────────────
+# The image runs as the unprivileged portal user (uid:gid 10001). Bind-mounted
+# state must be owned by that id or the non-root server can't read/write it.
+if [ "$(id -u)" = "0" ]; then
+  if chown 10001:10001 "$CONFIG_FILE" portal-secrets.json portal-device.json \
+       portal-users.json portal-context.json portal-rooms.json portal-audit.log 2>/dev/null; then
+    log "state files owned by container user 10001:10001"
+  else
+    warn "could not chown state files to 10001:10001"
+  fi
+else
+  warn "not running as root — the non-root container may not be able to read the state files"
+  warn "  fix: sudo chown 10001:10001 $(printf '%s ' "$CONFIG_FILE" portal-secrets.json portal-device.json portal-users.json portal-context.json portal-rooms.json portal-audit.log)"
+fi
+
 # ── preflight ───────────────────────────────────────────────────────────────
 command -v docker >/dev/null 2>&1 || die "docker not found — install Docker + compose plugin first"
 command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1 || die "docker compose plugin missing"

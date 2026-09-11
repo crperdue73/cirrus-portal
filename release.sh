@@ -33,6 +33,7 @@ FILES=(
   portal.html
   setup.html
   nexus.html
+  healthcheck.js
   Dockerfile
   docker-compose.yml
   .dockerignore
