@@ -38,7 +38,7 @@
   account (strong-password enforced), pick bind/port, add the first gateway,
   choose TLS mode. No working default exists until the wizard completes.
 
-- [ ] **5. TLS + reverse-proxy by default.**
+- [x] **5. TLS + reverse-proxy by default.** ✅ 2026-09-11
   Ship a Caddyfile and an nginx template; `--domain` sets it up with automatic
   certs; cookies become `Secure`/`HttpOnly`/`SameSite=Strict`; add HSTS and
   80→443 redirect. Portal **refuses to bind publicly without TLS** unless
@@ -176,3 +176,26 @@
   **Follow-up:** bind/port chosen in the wizard persist to config but only apply on the next
   restart (`restartRequired:true` is returned); real TLS termination still lands in item 5;
   the wizard is not yet surfaced by `install.sh` messaging (item 10).
+- **2026-09-11** — ✅ **Item 5 done.** TLS + reverse-proxy by default. The server now **refuses to
+  bind a public interface without TLS** (`assertTlsPolicy`): loopback is always fine, a public
+  bind must terminate TLS itself (`tlsCert`+`tlsKey` → `https.createServer`), sit behind a
+  trusted proxy (`trustProxy` / `tlsMode auto|manual`, reads `X-Forwarded-Proto`), or pass the
+  explicit, loudly-warned `--insecure-plaintext` / `PORTAL_INSECURE_PLAINTEXT=1`. Session cookies
+  are always `HttpOnly`+`SameSite=Strict` and gain `Secure` whenever TLS is in play; HSTS is emitted
+  in secure contexts. Shipped **`deploy/Caddyfile`** (automatic Let's Encrypt, 80→443 + HSTS) and
+  **`deploy/nginx/cirrus-portal.conf`** (HSTS + 301 redirect + `X-Forwarded-Proto`). `install.sh`
+  gained `--domain`/`--email` (wires Caddy, portal stays on loopback — updates an existing config),
+  `--tls-cert`/`--tls-key`, and `--insecure-plaintext`; it now **defaults to bind 127.0.0.1** and the
+  setup wizard rejects a public bind with TLS off. Evidence: `node --check` + `bash -n` clean; new
+  **`test-tls.js` 6/6** (loopback boots · public+TLS-off refused before listen · override boots with a
+  warning · TLS-proxy → Secure/HttpOnly/SameSite cookie + HSTS · direct HTTPS → same · templates do
+  HSTS+80→443); regressions green: `test-credentials.js` 3/3, `test-secrets.js` 3/3,
+  `test-setup.js` 3/3, `secret-scan.sh` clean (repo + freshly built `dist/agent-portal-2.2.0.tar.gz`,
+  which now carries `deploy/`). Commit `eed7aa2`.
+  **Note:** the installer's loopback-by-default pre-empts part of item 7; item 7 still owns the
+  server-side `DEFAULTS.bind`, the documented ufw helper, and the explicit public-exposure flag.
+  **FOLLOW-UP (quiet window + Dad's OK):** the LIVE box still binds `0.0.0.0` with `tlsMode:"off"` and
+  no insecure flag — with the new gate, a rebuild/restart would now **FAIL TO BOOT** until it gets
+  TLS (`./install.sh install --domain …`, recommended) or an explicit `--insecure-plaintext`. No live
+  deploy this run. (`reconnect-test.js` was already broken — stale marker — before this item; left for
+  item 13.)
