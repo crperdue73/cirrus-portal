@@ -69,6 +69,11 @@ const DEFAULTS = {
   tlsKey: '',              // PEM private-key path
   trustProxy: false,       // trust X-Forwarded-Proto from a TLS-terminating proxy
   insecurePlaintext: false,// explicit opt-out of the public-bind TLS gate
+  // Auth hardening (plan item 6)
+  loginMaxAttempts: 5,      // failed logins (per IP+username) before lockout
+  loginWindowSeconds: 900,  // rolling window those failures are counted in
+  loginLockoutSeconds: 300, // base lockout; doubles on repeat lockouts (≤1h)
+  sessionIdleMinutes: 0,    // 0 = no idle timeout (absolute TTL only)
 };
 
 // ── Credential safety ────────────────────────────────────────────────────────
@@ -82,6 +87,19 @@ const KNOWN_DEFAULT_PASSWORDS = [
   'admin', 'password', 'changeme', 'change-me', 'letmein', 'portal',
   'cirrus', 'perdue-portal-2026', 'instructor-demo', 'student-demo',
 ];
+
+// Broader blocklist of the most-abused passwords (plan item 6). Distinct from
+// KNOWN_DEFAULT_PASSWORDS (the boot guard for *shipped* defaults): this one is
+// enforced wherever an operator/user chooses a password.
+const PASSWORD_BLOCKLIST = new Set([
+  '123456', '12345678', '123456789', '1234567890', '12345', '111111', '000000',
+  'qwerty', 'qwerty123', 'qwertyuiop', '1q2w3e4r', 'qazwsx', 'zxcvbnm', 'asdfghjkl',
+  'abc123', 'password1', 'password123', 'passw0rd', 'p@ssw0rd', 'admin123', 'root',
+  'toor', 'welcome', 'welcome1', 'monkey', 'dragon', 'master', 'iloveyou', 'sunshine',
+  'princess', 'football', 'baseball', 'superman', 'batman', 'trustno1', 'letmein1',
+  '987654321', 'aaaaaaaa', '123123', '654321', 'secret', 'login', 'access', 'guest',
+  'default', 'cirrus', 'cirrusportal', 'portal',
+]);
 
 function hashPassword(password, salt) {
   return crypto.scryptSync(String(password), salt, 64).toString('hex');
@@ -146,6 +164,7 @@ function passwordPolicyError(pw, username) {
   if (s.length > 200) return 'password is too long';
   if (username && s.toLowerCase().includes(String(username).toLowerCase())) return 'password must not contain the username';
   if (KNOWN_DEFAULT_PASSWORDS.some(d => s.toLowerCase() === String(d).toLowerCase())) return 'password is a known-default/weak password — choose something unique';
+  if (PASSWORD_BLOCKLIST.has(s.toLowerCase())) return 'password is in the common-password blocklist — choose something unique';
   if (!/[a-z]/.test(s)) return 'password must include a lowercase letter';
   if (!/[A-Z]/.test(s)) return 'password must include an uppercase letter';
   if (!/[0-9]/.test(s)) return 'password must include a number';
@@ -197,6 +216,10 @@ function loadConfig() {
     PORTAL_TLS_MODE: 'tlsMode',
     PORTAL_TLS_CERT: 'tlsCert',
     PORTAL_TLS_KEY: 'tlsKey',
+    PORTAL_LOGIN_MAX_ATTEMPTS: 'loginMaxAttempts',
+    PORTAL_LOGIN_WINDOW_SECONDS: 'loginWindowSeconds',
+    PORTAL_LOGIN_LOCKOUT_SECONDS: 'loginLockoutSeconds',
+    PORTAL_SESSION_IDLE_MINUTES: 'sessionIdleMinutes',
   };
   for (const [envKey, cfgKey] of Object.entries(envMap)) {
     if (process.env[envKey] !== undefined) {
@@ -1217,6 +1240,7 @@ function completeSetup(body) {
 
   SETUP_REQUIRED = false;
   const tok = createSession(admin);
+  const sess = sessions.get(tok);
   audit('setup_complete', admin.username, admin.role, {
     bind: CONFIG.bind, port: CONFIG.port, tlsMode, gateway: gateway ? gateway.id : null,
   });
@@ -1224,6 +1248,7 @@ function completeSetup(body) {
     ok: true,
     user: publicUser(admin),
     session: tok,
+    csrfToken: sess ? sess.csrf : null,
     // bind/port only take effect on the next start; be honest about it.
     restartRequired: CONFIG.port !== prevPort || CONFIG.bind !== prevBind,
     config: { bind: CONFIG.bind, port: CONFIG.port, tlsMode },
@@ -1319,8 +1344,11 @@ function buildContextBlock(u) {
   return lines.join('\n');
 }
 
-// ── Sessions ───────────────────────────────────────────────────────────────
-const sessions = new Map(); // token -> { username, expiresAt }
+// ── Sessions (hardened — plan item 6) ──────────────────────────────────────
+// token -> { username, csrf, createdAt, lastSeen, expiresAt }. The token is a
+// 256-bit random value; each session also carries a CSRF secret. Absolute TTL
+// is CONFIG.sessionTtlHours; an optional idle timeout is CONFIG.sessionIdleMinutes.
+const sessions = new Map();
 
 function timingSafeEq(a, b) {
   const ba = Buffer.from(String(a));
@@ -1329,31 +1357,144 @@ function timingSafeEq(a, b) {
   return crypto.timingSafeEqual(ba, bb);
 }
 
+function sessionTtlMs() { return Math.max(1, Number(CONFIG.sessionTtlHours) || 12) * 3600_000; }
+function sessionIdleMs() {
+  const m = Number(CONFIG.sessionIdleMinutes);
+  return Number.isFinite(m) && m > 0 ? m * 60_000 : 0;
+}
+
 function createSession(user) {
-  const tok = crypto.randomBytes(24).toString('hex');
-  sessions.set(tok, { username: user.username, expiresAt: Date.now() + CONFIG.sessionTtlHours * 3600_000 });
+  const tok = crypto.randomBytes(32).toString('hex');
+  const now = Date.now();
+  sessions.set(tok, {
+    username: user.username,
+    csrf: crypto.randomBytes(32).toString('hex'),
+    createdAt: now,
+    lastSeen: now,
+    expiresAt: now + sessionTtlMs(),
+  });
   return tok;
 }
 
-function currentUser(req) {
+function destroySession(token) { if (token) sessions.delete(token); }
+
+// Nuke every session for a user — logout-all, and on password change/delete.
+function destroyUserSessions(username) {
+  let n = 0;
+  for (const [tok, s] of sessions) {
+    if (s.username === username) { sessions.delete(tok); n++; }
+  }
+  return n;
+}
+
+function sessionTokenFromReq(req) {
   const cookie = (req.headers.cookie || '').split(';').map(s => s.trim());
   for (const c of cookie) {
-    if (c.startsWith('portal_session=')) {
-      const tok = c.slice('portal_session='.length);
-      const s = sessions.get(tok);
-      if (!s) continue;
-      if (s.expiresAt < Date.now()) { sessions.delete(tok); continue; }
-      const u = findUser(s.username);
-      if (!u) { sessions.delete(tok); continue; }
-      return u;
-    }
+    if (c.startsWith('portal_session=')) return c.slice('portal_session='.length);
   }
   return null;
 }
 
-function auth(req) {
-  return currentUser(req) !== null;
+// Resolve (and lazily evict) the session for this request, enforcing the
+// absolute TTL and the optional idle timeout.
+function currentSession(req) {
+  const tok = sessionTokenFromReq(req);
+  if (!tok) return null;
+  const s = sessions.get(tok);
+  if (!s) return null;
+  const now = Date.now();
+  const idle = sessionIdleMs();
+  if (s.expiresAt < now || (idle && now - s.lastSeen > idle)) { sessions.delete(tok); return null; }
+  if (!findUser(s.username)) { sessions.delete(tok); return null; }
+  s.lastSeen = now;
+  return { token: tok, ...s };
 }
+
+function currentUser(req) {
+  const s = currentSession(req);
+  return s ? findUser(s.username) : null;
+}
+
+function auth(req) {
+  return currentSession(req) !== null;
+}
+
+// ── CSRF (plan item 6) ──────────────────────────────────────────────────────
+// Every state-changing request must carry the token minted with the caller's
+// session, in `X-CSRF-Token`. SameSite=Strict already blocks classic cross-site
+// form posts; the session-bound token blocks the rest (and a same-site XSS-less
+// forgery). If the browser sent an Origin, its host must also match ours —
+// defense in depth for callers that don't send the token.
+const STATE_CHANGING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
+function csrfOk(req, session) {
+  if (!session) return false;
+  const sent = req.headers['x-csrf-token'];
+  return typeof sent === 'string' && timingSafeEq(sent, session.csrf);
+}
+
+function originOk(req) {
+  const origin = req.headers.origin;
+  if (!origin) return true; // non-browser callers (installer/curl) send none
+  try {
+    const o = new URL(origin);
+    return o.host.toLowerCase() === String(req.headers.host || '').toLowerCase();
+  } catch { return false; }
+}
+
+// ── Login rate-limit + progressive lockout (plan item 6) ────────────────────
+// Keyed per (client IP | username) so one source cannot lock out a known user
+// for everyone, and a single username cannot be sprayed from one IP. In-memory:
+// a restart clears the counters (the only state lost is the attacker's lockout).
+const loginFailures = new Map(); // key -> { hits: [ts], lockouts: n, lockedUntil: ts }
+
+function clientIp(req) {
+  if (TRUST_PROXY) {
+    const xff = req.headers['x-forwarded-for'];
+    if (typeof xff === 'string' && xff.trim()) return xff.split(',')[0].trim();
+  }
+  return (req.socket && req.socket.remoteAddress) || 'unknown';
+}
+
+function loginKey(req, username) { return clientIp(req) + '|' + String(username || '').toLowerCase(); }
+
+function pruneHits(rec, now) {
+  const win = (Number(CONFIG.loginWindowSeconds) || 900) * 1000;
+  rec.hits = (rec.hits || []).filter(t => now - t < win);
+}
+
+// → null when allowed, else { retryAfter } seconds until the lockout expires.
+function loginGuard(req, username) {
+  const now = Date.now();
+  const rec = loginFailures.get(loginKey(req, username));
+  if (!rec) return null;
+  if (rec.lockedUntil && rec.lockedUntil > now) {
+    return { retryAfter: Math.ceil((rec.lockedUntil - now) / 1000) };
+  }
+  return null;
+}
+
+function recordLoginFailure(req, username) {
+  const now = Date.now();
+  const max = Math.max(1, Number(CONFIG.loginMaxAttempts) || 5);
+  const base = Math.max(1, Number(CONFIG.loginLockoutSeconds) || 300);
+  const key = loginKey(req, username);
+  const rec = loginFailures.get(key) || { hits: [], lockouts: 0, lockedUntil: 0 };
+  pruneHits(rec, now);
+  rec.hits.push(now);
+  if (rec.hits.length >= max) {
+    rec.lockouts += 1;
+    const secs = Math.min(base * Math.pow(2, rec.lockouts - 1), 3600); // progressive, capped at 1h
+    rec.lockedUntil = now + secs * 1000;
+    rec.hits = [];
+    loginFailures.set(key, rec);
+    return { locked: true, retryAfter: secs, lockouts: rec.lockouts };
+  }
+  loginFailures.set(key, rec);
+  return { locked: false, remaining: max - rec.hits.length };
+}
+
+function clearLoginFailures(req, username) { loginFailures.delete(loginKey(req, username)); }
 
 // Access: which agents can this user reach? '*' = all, 'gwId:*' = all agents
 // on one server, bare id matches any server with that agent.
@@ -2075,7 +2216,7 @@ async function handleApi(req, res, url) {
       'Content-Type': 'application/json',
       'Set-Cookie': sessionCookie(result.session, CONFIG.sessionTtlHours * 3600),
     });
-    return res.end(JSON.stringify({ ok: true, user: result.user, restartRequired: result.restartRequired, config: result.config }));
+    return res.end(JSON.stringify({ ok: true, user: result.user, csrfToken: result.csrfToken, restartRequired: result.restartRequired, config: result.config }));
   }
   // While setup is pending, refuse everything else: no account can work yet.
   if (SETUP_REQUIRED) {
@@ -2084,50 +2225,92 @@ async function handleApi(req, res, url) {
 
   // ── Public ──
   if (p === '/api/me') {
-    const u = currentUser(req);
+    const sess = currentSession(req);
+    const u = sess ? findUser(sess.username) : null;
     // defaultCreds=true only if an admin still uses a known-default password.
     // No defaults ship anymore, and the startup guard blocks boot on one — so
     // this is only reachable under PORTAL_ALLOW_INSECURE_DEFAULTS=1 (dev only).
     const defaultCreds = !!(u && u.role === 'admin' &&
       USERS.some(a => a.role === 'admin' && usesKnownDefaultCred(a)));
     return json(res, 200, u
-      ? { authed: true, user: publicUser(u), role: u.role, defaultCreds }
+      ? { authed: true, user: publicUser(u), role: u.role, csrfToken: sess.csrf, defaultCreds }
       : { authed: false, defaultCreds: false });
   }
 
   if (p === '/api/login' && req.method === 'POST') {
+    if (!originOk(req)) return json(res, 403, { error: 'cross-origin login refused' });
     const body = await readBody(req);
     if (!body || !body.username || !body.password) return json(res, 400, { error: 'username and password required' });
+    // Progressive lockout (plan item 6): check before verifying at all.
+    const gate = loginGuard(req, body.username);
+    if (gate) {
+      audit('login_throttled', String(body.username || '?').toLowerCase(), 'anon', { retryAfter: gate.retryAfter });
+      res.setHeader('Retry-After', String(gate.retryAfter));
+      return json(res, 429, { error: `too many failed attempts — try again in ${gate.retryAfter}s`, retryAfter: gate.retryAfter });
+    }
     const u = verifyUser(body.username, body.password);
     if (!u) {
-      audit('login_failed', String(body.username || '?').toLowerCase(), 'anon');
-      return json(res, 401, { error: 'wrong username or password' });
+      const r = recordLoginFailure(req, body.username);
+      audit('login_failed', String(body.username || '?').toLowerCase(), 'anon',
+        r.locked ? { locked: true, retryAfter: r.retryAfter } : { remaining: r.remaining });
+      if (r.locked) {
+        res.setHeader('Retry-After', String(r.retryAfter));
+        return json(res, 429, { error: `too many failed attempts — locked for ${r.retryAfter}s`, retryAfter: r.retryAfter });
+      }
+      return json(res, 401, { error: 'wrong username or password', remaining: r.remaining });
     }
+    clearLoginFailures(req, body.username);
+    // Session rotation on login: drop any cookie that arrived with the login
+    // request so a fixed/planted session id can never survive authentication.
+    destroySession(sessionTokenFromReq(req));
     const tok = createSession(u);
+    const sess = sessions.get(tok);
     audit('login', u.username, u.role);
     res.writeHead(200, {
       'Content-Type': 'application/json',
-      'Set-Cookie': sessionCookie(tok, CONFIG.sessionTtlHours * 3600),
+      'Set-Cookie': sessionCookie(tok, Math.floor(sessionTtlMs() / 1000)),
     });
-    return res.end(JSON.stringify({ ok: true, user: publicUser(u) }));
+    return res.end(JSON.stringify({ ok: true, user: publicUser(u), csrfToken: sess.csrf }));
   }
 
   if (p === '/api/logout' && req.method === 'POST') {
-    const u = currentUser(req);
+    if (!originOk(req)) return json(res, 403, { error: 'cross-origin request refused' });
+    const sess = currentSession(req);
+    if (sess && !csrfOk(req, sess)) return json(res, 403, { error: 'csrf token missing or invalid' });
+    const u = sess ? findUser(sess.username) : null;
     if (u) audit('logout', u.username, u.role);
-    const cookie = (req.headers.cookie || '').split(';').map(s => s.trim());
-    for (const c of cookie) {
-      if (c.startsWith('portal_session=')) {
-        sessions.delete(c.slice('portal_session='.length));
-      }
-    }
+    destroySession(sessionTokenFromReq(req));
     res.writeHead(200, { 'Content-Type': 'application/json', 'Set-Cookie': sessionCookie('', 0) });
     return res.end(JSON.stringify({ ok: true }));
+  }
+
+  // Log out everywhere: revoke every session for this user (plan item 6).
+  if (p === '/api/logout-all' && req.method === 'POST') {
+    if (!originOk(req)) return json(res, 403, { error: 'cross-origin request refused' });
+    const sess = currentSession(req);
+    if (!sess) return json(res, 401, { error: 'unauthorized' });
+    if (!csrfOk(req, sess)) return json(res, 403, { error: 'csrf token missing or invalid' });
+    const u = findUser(sess.username);
+    const n = destroyUserSessions(sess.username);
+    if (u) audit('logout_all', u.username, u.role, { sessions: n });
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Set-Cookie': sessionCookie('', 0) });
+    return res.end(JSON.stringify({ ok: true, sessions: n }));
   }
 
   // ── Authed below ──
   const user = currentUser(req);
   if (!user) return json(res, 401, { error: 'unauthorized' });
+
+  // CSRF gate (plan item 6): every state-changing request needs the token bound
+  // to this session. Login and setup are handled above (no session yet); every
+  // route under here is state-changing or a read and gets the same treatment.
+  if (STATE_CHANGING.has(req.method)) {
+    if (!originOk(req)) return json(res, 403, { error: 'cross-origin request refused' });
+    if (!csrfOk(req, currentSession(req))) {
+      audit('csrf_reject', user.username, user.role, { path: p, method: req.method });
+      return json(res, 403, { error: 'csrf token missing or invalid' });
+    }
+  }
 
   if (p === '/api/agents' && req.method === 'GET') {
     // Fan out agents.list to every configured gateway and merge, tagging each
@@ -2347,7 +2530,9 @@ async function handleApi(req, res, url) {
     let agents = Array.isArray(body.agents) ? body.agents.map(String) : [];
     agents = sanitizeAgents(agents);
     if (findUser(username)) return json(res, 409, { error: 'username already exists' });
-    if (String(body.password).length < 4) return json(res, 400, { error: 'password too short (min 4)' });
+    // Password policy (length + blocklist, plan item 6) — same bar as the wizard.
+    const newPwErr = passwordPolicyError(body.password, username);
+    if (newPwErr) return json(res, 400, { error: newPwErr });
     const salt = crypto.randomBytes(16).toString('hex');
     const u = {
       username,
@@ -2372,12 +2557,15 @@ async function handleApi(req, res, url) {
     const body = await readBody(req);
     const u = findUser(target);
     if (!u) return json(res, 404, { error: 'no such user' });
-    if (!body || !body.password || String(body.password).length < 4) return json(res, 400, { error: 'password too short (min 4)' });
+    const resetPwErr = passwordPolicyError(body && body.password, target);
+    if (resetPwErr) return json(res, 400, { error: resetPwErr });
     u.salt = crypto.randomBytes(16).toString('hex');
     u.hash = hashPassword(body.password, u.salt);
     saveUsers(USERS);
-    audit('user_password', user.username, user.role, { target });
-    return json(res, 200, { ok: true });
+    // A password change must invalidate every existing session for that user.
+    const revoked = destroyUserSessions(target);
+    audit('user_password', user.username, user.role, { target, sessionsRevoked: revoked });
+    return json(res, 200, { ok: true, sessionsRevoked: revoked });
   }
 
   // Update a user's assigned agents (admin) — lets admins change access
@@ -2405,6 +2593,7 @@ async function handleApi(req, res, url) {
     if (u.role === 'admin' && USERS.filter(x => x.role === 'admin').length <= 1) return json(res, 400, { error: 'cannot delete the last admin' });
     USERS = USERS.filter(x => x.username !== target);
     saveUsers(USERS);
+    destroyUserSessions(target);
     audit('user_delete', user.username, user.role, { target });
     return json(res, 200, { ok: true });
   }

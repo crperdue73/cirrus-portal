@@ -98,6 +98,8 @@ const mode = (p) => (fs.statSync(p).mode & 0o777).toString(8);
       assert(lr.ok, `B: login failed (${lr.status})`);
       const cookie = (lr.headers.get('set-cookie') || '').split(';')[0];
       assert(cookie, 'B: no session cookie');
+      const csrf = (await lr.json()).csrfToken; // plan item 6: state-changing calls need it
+      assert(csrf, 'B: login did not return a csrf token');
 
       let gr = await fetch(`${base}/api/gateways`, { headers: { Cookie: cookie } });
       let gj = await gr.json();
@@ -109,7 +111,7 @@ const mode = (p) => (fs.statSync(p).mode & 0o777).toString(8);
       // add a second gateway with a fresh token via the API
       const NEWTOK = 'api-set-token-fedcba9876543210';
       const pr = await fetch(`${base}/api/gateways`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: cookie },
+        method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: cookie, 'X-CSRF-Token': csrf },
         body: JSON.stringify({ id: 'lab', name: 'Lab', url: 'ws://127.0.0.1:8', token: NEWTOK, enabled: false }),
       });
       const pj = await pr.json();

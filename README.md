@@ -290,13 +290,35 @@ Accounts live in `portal-users.json` (scrypt-hashed, chmod 600, bind-mounted).
   you also pick bind/port, TLS intent, and the first gateway. There is no
   working default at any point.
 
-Change the password after first login via **Users → reset pw**. No demo accounts
-are shipped. The server **refuses to start** if an admin account still uses a
-known-default password (`admin`, `password`, `perdue-portal-2026`, …); a
-dev-only escape hatch is `PORTAL_ALLOW_INSECURE_DEFAULTS=1`.
+Change the password after first login via **Users → reset pw**. Passwords must
+clear the policy everywhere an account is created or reset: **12+ chars**, with
+upper + lower + a number, not the username, not a known default, and not on the
+common-password blocklist. No demo accounts are shipped. The server **refuses to
+start** if an admin account still uses a known-default password (`admin`,
+`password`, `perdue-portal-2026`, …); a dev-only escape hatch is
+`PORTAL_ALLOW_INSECURE_DEFAULTS=1`.
 
-Every login/send/abort/account change is appended to `portal-audit.log`
-(admins can browse it in the UI).
+### Auth hardening (Sep 2026)
+
+- **Login rate-limit + progressive lockout.** Repeated failures for one
+  (IP + username) are counted in a rolling window; once
+  `loginMaxAttempts` is hit the account is locked out for
+  `loginLockoutSeconds`, doubling on each repeat (capped at 1h). Locked logins
+  return `429` with a `Retry-After` header — even with the correct password.
+- **CSRF tokens.** Every state-changing request (`POST`/`PATCH`/`DELETE`, and
+  `/api/logout-all`) must send the session-bound token from `/api/me`
+  (or the login response) in the **`X-CSRF-Token`** header; a non-matching
+  `Origin` is refused too. Plain `GET` reads are unaffected.
+- **Session rotation on login.** Each login mints a fresh session id and drops
+  any session id that arrived with the request (no session fixation).
+- **Log out all.** `POST /api/logout-all` revokes every session for the
+  account (UI: **log out all** in the sidebar footer).
+- **Configurable TTL.** Absolute lifetime is `sessionTtlHours`; optional idle
+  expiry is `sessionIdleMinutes` (`0` = off). A password reset also revokes all
+  of that user's live sessions.
+
+Every login/send/abort/account change (plus lockouts and CSRF rejects) is
+appended to `portal-audit.log` (admins can browse it in the UI).
 
 ## How it works
 
@@ -336,9 +358,20 @@ Browser ──HTTP/SSE──▶ portal-server.js ──WebSocket (loopback)─�
   "gateways": [
     { "id": "home", "name": "Home", "url": "ws://127.0.0.1:18790", "enabled": true }
   ],
-  "sessionTtlHours": 12
+  "sessionTtlHours": 12,
+  "sessionIdleMinutes": 0,
+  "loginMaxAttempts": 5,
+  "loginWindowSeconds": 900,
+  "loginLockoutSeconds": 300
 }
 ```
+
+Auth knobs (all optional; shown with defaults): `sessionTtlHours` absolute
+session lifetime, `sessionIdleMinutes` idle expiry (`0` = off), and the login
+lockout trio `loginMaxAttempts` / `loginWindowSeconds` / `loginLockoutSeconds`.
+Each also has an env override (`SESSION_TTL_HOURS`, `PORTAL_SESSION_IDLE_MINUTES`,
+`PORTAL_LOGIN_MAX_ATTEMPTS`, `PORTAL_LOGIN_WINDOW_SECONDS`,
+`PORTAL_LOGIN_LOCKOUT_SECONDS`).
 
 Gateway tokens and the first-run admin password do **not** live here — they live
 in `portal-secrets.json` (chmod 600), which is never committed, backed up, or
@@ -403,8 +436,12 @@ the gateway restarts (exponential backoff, 1s → 30s).
 All `/api/*` need the `portal_session` cookie from `/api/login`.
 
 ```
-POST /api/login  {username,password}  → sets cookie
-GET  /api/me                         → { authed, user:{username,role,agents} }
+POST /api/login  {username,password}  → sets cookie + { csrfToken } (429 if locked out)
+POST /api/logout                     → clear this session (needs X-CSRF-Token)
+POST /api/logout-all                 → revoke every session for the account (needs X-CSRF-Token)
+GET  /api/me                         → { authed, user:{username,role,agents}, csrfToken }
+
+# every POST/PATCH/DELETE below needs the header: X-CSRF-Token: <csrfToken>
 GET  /api/agents                     → { agents: [{id,name,emoji}], connected, restricted }
 GET  /api/history?session=agent:X:main → { messages: [{role,text,time,toolName}] }
 POST /api/send    {session,message}   → { runId, injected, context }
@@ -482,8 +519,10 @@ appears in the transcript.
   session and are **not** pushed to Telegram or other channels.
 - Each browser tab gets its own live stream; multiple people can watch one
   agent's session at once.
-- Portal sessions expire after 12 hours by default — just log in again.
-- No login rate-limiting yet (POC) — TODO before real deployment.
+- Portal sessions expire after 12 hours by default (and after
+  `sessionIdleMinutes` idle, if set) — just log in again.
+- Login is rate-limited with progressive lockout, and every state-changing
+  request is CSRF-protected (see **Auth hardening**).
 
 ## Phase I roadmap (Dad's list, kickoff Aug 3 2026)
 

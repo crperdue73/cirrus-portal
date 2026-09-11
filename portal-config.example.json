@@ -12,5 +12,9 @@
   ],
   "tlsMode": "auto",
   "trustProxy": true,
-  "sessionTtlHours": 12
+  "sessionTtlHours": 12,
+  "sessionIdleMinutes": 0,
+  "loginMaxAttempts": 5,
+  "loginWindowSeconds": 900,
+  "loginLockoutSeconds": 300
 }
