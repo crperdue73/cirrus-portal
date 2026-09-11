@@ -1,0 +1,51 @@
+# ═══════════════════════════════════════════════════════════════════════════
+#  Cirrus Portal — Caddy reverse proxy (automatic HTTPS)
+# ═══════════════════════════════════════════════════════════════════════════
+#  Caddy obtains and renews Let's Encrypt certificates automatically and
+#  redirects plain HTTP (port 80) to HTTPS (443) with no extra config.
+#
+#  Quick start:
+#    PORTAL_DOMAIN=portal.example.com PORTAL_PORT=18800 caddy run --config ./Caddyfile
+#  Or let the installer wire it up:
+#    ./install.sh install --domain portal.example.com --email you@example.com
+#
+#  Requirements:
+#    • DNS A/AAAA record for the domain points at THIS host
+#    • inbound 80 + 443 open (Caddy needs 80 for the ACME challenge + redirect)
+#    • Cirrus Portal bound to loopback (127.0.0.1:18800) — see portal-config.json
+#      (tlsMode:"auto", trustProxy:true → Secure cookies + HSTS)
+#
+#  Env overrides: {$VAR:default} — set PORTAL_DOMAIN / PORTAL_PORT / ACME_EMAIL.
+# ═══════════════════════════════════════════════════════════════════════════
+
+{
+	email {$ACME_EMAIL:}
+	# Uncomment for local testing against a staging CA:
+	# acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+}
+
+{$PORTAL_DOMAIN:portal.example.com} {
+	encode zstd gzip
+
+	header {
+		# HSTS: browsers remember to use HTTPS for a year (auto-redirect below).
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	# Caddy issues a permanent redirect http→https for this site automatically;
+	# the explicit block below makes the 80→443 redirect intent obvious.
+	@http protocol http
+	redir @http https://{host}{uri} permanent
+
+	reverse_proxy 127.0.0.1:{$PORTAL_PORT:18800} {
+		# Tell the portal the original request was HTTPS → Secure cookies + HSTS.
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Real-IP {remote_host}
+		# Server-Sent Events (chat + room streams) must not be buffered.
+		flush_interval -1
+	}
+}

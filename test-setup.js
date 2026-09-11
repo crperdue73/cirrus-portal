@@ -13,6 +13,9 @@
  *   D. an installer/headless box (portalPassword in config) does NOT enter
  *      setup mode — item 2's auto-mint behavior is preserved.
  *
+ * Waits for the server's final banner line (`ready.`) so the whole startup
+ * banner is flushed before assertions run.
+ *
  * Zero dependencies. Run: node test-setup.js
  */
 
@@ -52,7 +55,7 @@ function startServer(dir, env) {
       resolve({ child, out, err, port: cfg.port, stop: () => { try { child.kill('SIGKILL'); } catch { /* gone */ } } });
     };
     const timer = setTimeout(finish, 8000);
-    const onData = (d) => { out += d; if (out.includes('users:')) { clearTimeout(timer); finish(); } };
+    const onData = (d) => { out += d; if (out.includes('ready.')) { clearTimeout(timer); finish(); } };
     child.stdout.on('data', onData);
     child.stderr.on('data', (d) => { err += d; });
     child.on('exit', () => { clearTimeout(timer); finish(); });

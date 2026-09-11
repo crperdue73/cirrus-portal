@@ -42,6 +42,8 @@ FILES=(
   portal-config.example.json
   portal-secrets.example.json
   secret-scan.sh
+  deploy/Caddyfile
+  deploy/nginx/cirrus-portal.conf
   README.md
   REPLICATION.md
   VERSION
@@ -59,7 +61,8 @@ done
 rm -rf dist/stage
 mkdir -p "$STAGE"
 for f in "${FILES[@]}"; do
-  cp -a "$f" "$STAGE/"
+  mkdir -p "$STAGE/$(dirname "$f")"
+  cp -a "$f" "$STAGE/$f"
 done
 # Installer must be executable in the tarball.
 chmod +x "$STAGE/install.sh"

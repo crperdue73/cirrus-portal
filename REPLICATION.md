@@ -99,8 +99,25 @@ ssh user@new-server 'cd /tmp && tar xzf agent-portal-2.1.0.tar.gz \
 ./install.sh status
 
 # 4. Open the UI:
-#    http://<server-ip>:18800   (admin password is in portal-credentials.txt)
+#    https://<domain>/            (when installed with --domain)
+#    http://127.0.0.1:18800        (loopback default — tunnel in)
+#    admin password is in portal-credentials.txt
 ```
+
+> **TLS / exposure (Sep 2026):** the installer now binds **127.0.0.1 by
+> default** and **refuses a public bind without TLS**. For a public host use
+> automatic HTTPS:
+>
+> ```bash
+> ./install.sh install --domain portal.example.com --email you@example.com
+> ```
+>
+> That keeps the portal on loopback and runs **Caddy** in front (automatic
+> Let's Encrypt certs, 80→443 redirect, HSTS). Alternatives: `--tls-cert` /
+> `--tls-key` to serve your own certificate, or point your own TLS-terminating
+> proxy at the loopback port and set `trustProxy:true`. Cleartext public access
+> needs the explicit `--insecure-plaintext` (trusted LAN/tunnel only).
+> Templates: `deploy/Caddyfile`, `deploy/nginx/cirrus-portal.conf`.
 
 That's it. From a cold server to a working portal in ~2 minutes, and the whole
 flow is repeatable per machine. To approve the device, `install.sh install`

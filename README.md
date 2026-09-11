@@ -46,6 +46,9 @@ will even do itself when `openclaw` is on PATH):
 - **Preflight checks**: OS, disk space, Docker + Compose v2, port conflicts,
   gateway reachability — fails fast with clear messages.
 - **Harden-permissions pass**: config + state + credentials all chmod 600.
+- **TLS by default**: binds `127.0.0.1` and **refuses a public bind without
+  TLS**. `--domain` sets up automatic HTTPS (Caddy); see “TLS & public
+  exposure” below.
 - **Optional firewall rule** (`--firewall`, ufw) and **device approval**
   (`--approve` is the default; `--no-approve` to skip).
 - **Idempotent**: re-running `install` on a healthy box changes nothing.
@@ -67,6 +70,38 @@ Full command set:
 (`dist/agent-portal-<ver>.tar.gz` + `SHA256SUMS`) that contains only code +
 installer + docs — never per-server state. The older `bootstrap.sh` remains
 as a legacy path; `install.sh` supersedes it.
+
+## TLS & public exposure (Sep 2026)
+
+The portal is **secure by default**: it binds `127.0.0.1` (loopback) and
+**refuses to bind a public interface without TLS** unless you explicitly opt
+out. Three supported ways to expose it:
+
+```bash
+# 1. Automatic HTTPS with Caddy (recommended) — the installer wires it up:
+./install.sh install --domain portal.example.com --email you@example.com
+#    → portal on 127.0.0.1:18800; Caddy terminates TLS on 80/443 with
+#      automatic Let's Encrypt certs, redirects 80→443, sends HSTS.
+
+# 2. Bring your own certificate (the portal serves HTTPS itself):
+./install.sh install --tls-cert /etc/ssl/fullchain.pem --tls-key /etc/ssl/privkey.pem
+
+# 3. Front it with your own TLS-terminating proxy, then trust it:
+#    set trustProxy:true (or tlsMode:"auto") in portal-config.json
+#    (nginx template: deploy/nginx/cirrus-portal.conf)
+```
+
+When TLS is in play — direct or via a trusted proxy — session cookies become
+`Secure; HttpOnly; SameSite=Strict` and responses carry
+`Strict-Transport-Security` (HSTS). Loopback-only installs need no TLS.
+
+Cleartext on a public interface is refused at boot. The only override is the
+explicit, loudly-warned `--insecure-plaintext` / `PORTAL_INSECURE_PLAINTEXT=1`
+(a trusted LAN or a tunnel — never the open internet).
+
+Shipped proxy templates live in `deploy/`: `deploy/Caddyfile` (automatic
+certs) and `deploy/nginx/cirrus-portal.conf` — both do HSTS, an 80→443
+redirect, and forward `X-Forwarded-Proto` so the portal marks cookies `Secure`.
 
 ## Multi-server (Aug 6 2026) — one portal, N gateway servers
 

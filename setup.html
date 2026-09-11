@@ -136,7 +136,7 @@
         <option value="manual">Manual (reverse proxy terminates TLS)</option>
         <option value="off">Off (local / trusted LAN only)</option>
       </select>
-      <div class="hint">TLS wiring lands with the public installer; this records your choice in the config.</div>
+      <div class="hint">TLS is required for a public bind. Automatic uses Caddy (see the installer's <code>--domain</code>); Manual means your own TLS-terminating reverse proxy. 127.0.0.1 needs no TLS.</div>
     </div>
 
     <div class="card">

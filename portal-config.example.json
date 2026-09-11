@@ -1,7 +1,7 @@
 {
-  "_comment": "portal-config.json is TOKEN-FREE. Gateway tokens + the bootstrap admin password live in portal-secrets.json (0600). See NAMING.md / plan item 3.",
+  "_comment": "portal-config.json is TOKEN-FREE. Gateway tokens + the bootstrap admin password live in portal-secrets.json (0600). TLS/exposure: a public bind requires TLS (plan item 5) — see deploy/Caddyfile and deploy/nginx/cirrus-portal.conf.",
   "port": 18800,
-  "bind": "0.0.0.0",
+  "bind": "127.0.0.1",
   "gateways": [
     {
       "id": "home",
@@ -10,5 +10,7 @@
       "enabled": true
     }
   ],
+  "tlsMode": "auto",
+  "trustProxy": true,
   "sessionTtlHours": 12
 }

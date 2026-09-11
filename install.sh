@@ -54,13 +54,21 @@ GATEWAY_PORT="18790"
 
 # ── flags / env ─────────────────────────────────────────────────────────────
 PORT="${PORT:-18800}"
-BIND="${BIND:-0.0.0.0}"
+# Loopback by default (plan item 5): a public bind requires TLS or --insecure-plaintext.
+BIND="${BIND:-127.0.0.1}"
 GATEWAY_URL="${GATEWAY_URL:-ws://$GATEWAY_HOST:$GATEWAY_PORT}"
 SESSION_TTL_HOURS="${SESSION_TTL_HOURS:-12}"
 GATEWAY_TOKEN="${GATEWAY_TOKEN:-}"
 PORTAL_PASSWORD="${PORTAL_PASSWORD:-}"
 GATEWAY_ID="${GATEWAY_ID:-home}"
 GATEWAY_NAME="${GATEWAY_NAME:-Home}"
+
+# TLS / exposure (plan item 5)
+DOMAIN=""
+ACME_EMAIL=""
+TLS_CERT=""
+TLS_KEY=""
+INSECURE_PLAINTEXT=0
 
 CMD=""
 FRESH=0
@@ -105,15 +113,30 @@ $C_CYN Commands:$C_RST
   version     Print version and exit.
 
 $C_CYN Options:$C_RST
+  --domain HOST     Serve the public site at HOST over automatic HTTPS
+                    (installs a Caddy reverse proxy; portal stays on loopback).
+  --email ADDR      ACME account email for --domain (Let's Encrypt).
+  --tls-cert PATH   Serve HTTPS directly with this certificate (with --tls-key).
+  --tls-key PATH    Private key for --tls-cert.
+  --insecure-plaintext
+                    Allow a PUBLIC bind WITHOUT TLS. Cleartext — never for the
+                    open internet; for trusted LAN/tunnels only.
   --fresh           Wipe local state (device, users, rooms, audit, context)
                     before install. For NEW servers / factory reset.
   --force-config    Rewrite portal-config.json from env even if it exists.
   --no-approve      Skip the device-approval step on the gateway.
-  --firewall        Open the portal port in ufw (if ufw is active).
+  --firewall        Open the portal port in ufw (80/443 when --domain is used).
   --purge           With uninstall: also delete config, state, credentials.
   --dry-run         Print what install would do, change nothing.
   -y, --yes         Assume yes for all prompts.
   -h, --help        Show this help.
+
+$C_CYN TLS / exposure:$C_RST
+  Default bind is 127.0.0.1 (loopback). A public bind requires TLS unless you
+  pass --insecure-plaintext. Three ways to go public safely:
+    ./install.sh install --domain portal.example.com --email you@example.com
+    ./install.sh install --tls-cert /path/fullchain.pem --tls-key /path/privkey.pem
+    (or front it with your own TLS-terminating proxy + trustProxy:true)
 
 $C_CYN Env:$C_RST
   GATEWAY_TOKEN      This server's OpenClaw gateway token. Auto-detected
@@ -121,12 +144,14 @@ $C_CYN Env:$C_RST
   PORTAL_PASSWORD    Admin login password. On a FRESH install a strong
                      random one is generated and saved to portal-credentials.txt
                      if you don't provide one.
-  PORT / BIND / GATEWAY_URL / SESSION_TTL_HOURS
+  PORT / BIND / GATEWAY_URL / SESSION_TTL_HOURS / PORTAL_TLS_MODE
   GATEWAY_ID / GATEWAY_NAME   (gateway list entry; defaults home/Home)
 
 $C_CYN Examples:$C_RST
   ./install.sh install --fresh
+  ./install.sh install --fresh --domain portal.example.com --email me@example.com
   GATEWAY_TOKEN=abc123 PORTAL_PASSWORD='hunter2!' ./install.sh install --fresh --firewall
+  BIND=0.0.0.0 ./install.sh install --insecure-plaintext   # trusted LAN only
   ./install.sh status
   ./install.sh backup
 EOF
@@ -172,9 +197,57 @@ json_get() { # json_get FILE key
   fi
 }
 
+# is_loopback_bind ADDR → 0 when the address is host-local only.
+is_loopback_bind() {
+  case "${1:-}" in
+    127.0.0.1|::1|localhost|127.*|\[::1\]) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Merge key=value pairs into portal-config.json (JSON-safe, keeps it 0600).
+# An empty value deletes the key. Booleans are written as true/false.
+config_patch() { # config_patch key=value [key=value ...]
+  local f="$CONFIG_FILE"
+  [ -f "$f" ] || return 0
+  if have python3; then
+    python3 - "$f" "$@" <<'PY'
+import json,sys
+f=sys.argv[1]
+d=json.load(open(f))
+for pair in sys.argv[2:]:
+    k,v=pair.split('=',1)
+    if v=='': d.pop(k,None)
+    elif v=='true': d[k]=True
+    elif v=='false': d[k]=False
+    else:
+        try: d[k]=int(v)
+        except ValueError: d[k]=v
+json.dump(d,open(f,'w'),indent=2)
+PY
+  elif have node; then
+    node -e '
+      const fs=require("fs"),f=process.argv[1];
+      const d=JSON.parse(fs.readFileSync(f,"utf8"));
+      for(const pair of process.argv.slice(2)){
+        const i=pair.indexOf("="),k=pair.slice(0,i),v=pair.slice(i+1);
+        if(v==="")delete d[k];
+        else if(v==="true")d[k]=true;
+        else if(v==="false")d[k]=false;
+        else if(/^-?\d+$/.test(v))d[k]=parseInt(v,10);
+        else d[k]=v;
+      }
+      fs.writeFileSync(f,JSON.stringify(d,null,2));
+    ' "$f" "$@"
+  fi
+  chmod 600 "$f" 2>/dev/null || true
+}
+
 # ── argument parsing ────────────────────────────────────────────────────────
 ARGS=("$@")
-for arg in "$@"; do
+_i=0
+while [ "$_i" -lt "${#ARGS[@]}" ]; do
+  arg="${ARGS[$_i]}"
   case "$arg" in
     install|upgrade|status|doctor|backup|restore|uninstall|version) CMD="$arg" ;;
     --fresh) FRESH=1 ;;
@@ -183,12 +256,18 @@ for arg in "$@"; do
     --firewall) DO_FIREWALL=1 ;;
     --purge) PURGE=1 ;;
     --dry-run) DRY_RUN=1 ;;
+    --insecure-plaintext) INSECURE_PLAINTEXT=1 ;;
+    --domain) _i=$((_i+1)); DOMAIN="${ARGS[$_i]:-}"; [ -n "$DOMAIN" ] || die "--domain needs a hostname (e.g. --domain portal.example.com)" ;;
+    --email) _i=$((_i+1)); ACME_EMAIL="${ARGS[$_i]:-}" ;;
+    --tls-cert) _i=$((_i+1)); TLS_CERT="${ARGS[$_i]:-}"; [ -n "$TLS_CERT" ] || die "--tls-cert needs a certificate path" ;;
+    --tls-key) _i=$((_i+1)); TLS_KEY="${ARGS[$_i]:-}"; [ -n "$TLS_KEY" ] || die "--tls-key needs a key path" ;;
     -y|--yes) YES=1 ;;
     -h|--help) usage; exit 0 ;;
     --*) die "unknown option: $arg (see --help)" ;;
     *) if [ "$CMD" = "restore" ] && [ -z "${RESTORE_FILE:-}" ]; then RESTORE_FILE="$arg";
        else die "unknown argument: $arg (see --help)"; fi ;;
   esac
+  _i=$((_i+1))
 done
 [ -z "$CMD" ] && CMD="install"
 if [ "$CMD" = "restore" ] && [ -z "${RESTORE_FILE:-}" ]; then
@@ -228,9 +307,11 @@ run_status() {
   else
     warn "gateway socket NOT reachable on $GATEWAY_HOST:$GATEWAY_PORT"; fails=$((fails+1))
   fi
-  # http
-  local code
-  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1:$port_cfg/" || true)"
+  # http (direct-TLS installs need https)
+  local code _tls
+  _tls="$(json_get "$CONFIG_FILE" tlsMode 2>/dev/null)"; _tls="${_tls:-off}"
+  local _scheme="http"; [ "$_tls" = "manual" ] && _scheme="https"
+  code="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 "$_scheme://127.0.0.1:$port_cfg/" || true)"
   case "$code" in
     200|302|401) ok "portal answering HTTP on :$port_cfg (code $code)" ;;
     *) warn "no HTTP response on :$port_cfg (got '$code')"; fails=$((fails+1)) ;;
@@ -301,6 +382,18 @@ run_doctor() {
   else
     warn "no $SECRETS_FILE and no config token — gateway token missing"; fails=$((fails+1))
   fi
+  # TLS / exposure (plan item 5)
+  {
+    local _tls _bind
+    _tls="$(json_get "$CONFIG_FILE" tlsMode 2>/dev/null)"; _tls="${_tls:-off}"
+    _bind="$(json_get "$CONFIG_FILE" bind 2>/dev/null)"; _bind="${_bind:-?}"
+    case "$_tls" in
+      auto)   ok "TLS: automatic (reverse proxy / Caddy terminates) — bind $_bind" ;;
+      manual) ok "TLS: manual (own certs or operator proxy) — bind $_bind" ;;
+      *)      if is_loopback_bind "$_bind"; then ok "TLS: off (loopback $_bind only)";
+              else warn "TLS: off with public bind $_bind — cleartext (needs --insecure-plaintext or TLS)"; fi ;;
+    esac
+  }
   # state files
   for f in "${STATE_FILES[@]}"; do
     [ -e "$f" ] || warn "state file missing: $f"
@@ -456,8 +549,101 @@ verify_admin_login() {
   rm -f "$jar"; return "$rc"
 }
 
+# ── Caddy reverse proxy (plan item 5) ───────────────────────────────────────
+# Wires automatic Let's Encrypt HTTPS in front of the loopback portal. Writes a
+# Caddyfile next to the installer and starts it as a systemd service when we can.
+# Never fatal: if caddy isn't installed we print the exact next steps instead.
+setup_caddy() { # setup_caddy DOMAIN PORT
+  local domain="$1" port="$2"
+  local src="$DIR/deploy/Caddyfile"
+  local conf="$DIR/Caddyfile"
+  local envf="$DIR/deploy/caddy.env"
+
+  if [ ! -f "$src" ]; then
+    warn "deploy/Caddyfile not found — skipping reverse-proxy setup (portal stays on loopback)"
+    info "point your own TLS proxy at 127.0.0.1:$port and set trustProxy:true"
+    return 0
+  fi
+  cp -f "$src" "$conf"
+  {
+    echo "PORTAL_DOMAIN=$domain"
+    echo "PORTAL_PORT=$port"
+    [ -n "$ACME_EMAIL" ] && echo "ACME_EMAIL=$ACME_EMAIL"
+  } > "$envf"
+  chmod 600 "$envf" 2>/dev/null || true
+  ok "Caddyfile written: $conf (domain $domain → 127.0.0.1:$port)"
+
+  if ! have caddy; then
+    warn "caddy is not installed — HTTPS is NOT live yet. Install it, then run:"
+    info "  curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg"
+    info "  sudo apt install caddy   # or: https://caddyserver.com/docs/install"
+    info "  sudo caddy run --config $conf --envfile $envf"
+    return 0
+  fi
+
+  info "validating Caddyfile…"
+  if ! PORTAL_DOMAIN="$domain" PORTAL_PORT="$port" ACME_EMAIL="$ACME_EMAIL" caddy validate --config "$conf" >/dev/null 2>&1; then
+    warn "Caddyfile validation failed — check $conf (DNS for $domain must point here)"
+    return 0
+  fi
+  ok "Caddyfile is valid"
+
+  if have systemctl && [ "$(id -u)" = "0" ]; then
+    cat > /etc/systemd/system/cirrus-portal-caddy.service <<EOF
+[Unit]
+Description=Cirrus Portal reverse proxy (Caddy)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+EnvironmentFile=$envf
+ExecStart=$(command -v caddy) run --config $conf
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload
+    if systemctl enable --now cirrus-portal-caddy >/dev/null 2>&1; then
+      ok "Caddy started (systemd: cirrus-portal-caddy) — HTTPS for https://$domain"
+    else
+      warn "could not start the Caddy service — run: sudo systemctl start cirrus-portal-caddy"
+    fi
+  else
+    info "start Caddy manually (or as a service):"
+    info "  sudo caddy run --config $conf --envfile $envf"
+  fi
+}
+
 run_install() {
   detect_docker
+
+  # ── TLS / exposure policy (plan item 5) ─────────────────────────────────
+  # Decide how the portal is exposed before we touch anything. A public bind
+  # without TLS is refused unless --insecure-plaintext is explicitly given.
+  local tls_mode="off" trust_proxy="false"
+  if [ -n "$DOMAIN" ]; then
+    tls_mode="auto"; trust_proxy="true"; BIND="127.0.0.1"
+    ok "TLS: automatic HTTPS for $DOMAIN via Caddy (portal stays on loopback)"
+  elif [ -n "$TLS_CERT" ] || [ -n "$TLS_KEY" ]; then
+    [ -n "$TLS_CERT" ] && [ -n "$TLS_KEY" ] || die "--tls-cert and --tls-key must be given together"
+    [ -r "$TLS_CERT" ] || die "certificate not readable: $TLS_CERT"
+    [ -r "$TLS_KEY" ]  || die "private key not readable: $TLS_KEY"
+    tls_mode="manual"
+    ok "TLS: serving HTTPS directly (${TLS_CERT})"
+  fi
+  if [ "$tls_mode" = "off" ] && ! is_loopback_bind "$BIND"; then
+    if [ "$INSECURE_PLAINTEXT" = "1" ]; then
+      warn "INSECURE-PLAINTEXT: binding $BIND in cleartext. NEVER expose this to the public internet."
+    else
+      die "refusing to bind $BIND without TLS.
+  Choose one:
+    ./install.sh install --domain portal.example.com     # automatic HTTPS (recommended)
+    ./install.sh install --tls-cert C --tls-key K        # bring your own certificate
+    BIND=127.0.0.1 ./install.sh install                  # loopback only (default)
+    ./install.sh install --insecure-plaintext            # cleartext — NOT for public hosts"
+    fi
+  fi
 
   # ── dry-run gate (BEFORE any destructive step) ─────────────────────────
   if [ "$DRY_RUN" = "1" ]; then
@@ -465,9 +651,18 @@ run_install() {
     [ -f "$CONFIG_FILE" ] && cur_port="$(json_get "$CONFIG_FILE" port)" && [ -n "$cur_port" ] || cur_port="$PORT"
     info "dry-run — no changes will be made."
     log "config:   port $cur_port, bind $BIND, gateway $GATEWAY_URL"
+    local tls_desc="mode $tls_mode"
+    [ "$trust_proxy" = "true" ] && tls_desc="$tls_desc (proxy terminates TLS)"
+    [ -n "$DOMAIN" ] && tls_desc="$tls_desc — https://$DOMAIN via Caddy"
+    [ -n "$TLS_CERT" ] && tls_desc="$tls_desc — direct HTTPS ($TLS_CERT)"
+    if [ "$tls_mode" = "off" ]; then
+      if is_loopback_bind "$BIND"; then tls_desc="$tls_desc — loopback only"; else tls_desc="$tls_desc — INSECURE PLAINTEXT"; fi
+    fi
+    log "tls:      $tls_desc"
     log "token:    ${GATEWAY_TOKEN:+provided / auto-detected}${GATEWAY_TOKEN:-<will auto-detect from gateway config>}"
     log "actions:  write config ($([ "$FORCE_CONFIG" = "1" ] || [ ! -f "$CONFIG_FILE" ] && echo yes || echo no)) · wipe state ($([ "$FRESH" = "1" ] && echo yes || echo no))"
     log "          build+start container · seed unique admin password (fresh only) · approve device ($([ "$DO_APPROVE" = "1" ] && echo yes || echo no)) · firewall ($([ "$DO_FIREWALL" = "1" ] && echo yes || echo no))"
+    [ -n "$DOMAIN" ] && log "          configure Caddy (automatic certs) → https://$DOMAIN"
     return 0
   fi
 
@@ -521,6 +716,12 @@ run_install() {
       PORTAL_PASSWORD="$(gen_password)"
       info "generated a strong unique admin password for first-run seeding"
     fi
+    # Optional TLS/proxy lines (empty when unused — JSON tolerates the blank lines).
+    local tl_cert_line="" tl_key_line="" tl_trust_line="" tl_insec_line=""
+    [ -n "$TLS_CERT" ] && tl_cert_line="  \"tlsCert\": \"$TLS_CERT\","
+    [ -n "$TLS_KEY" ] && tl_key_line="  \"tlsKey\": \"$TLS_KEY\","
+    [ "$trust_proxy" = "true" ] && tl_trust_line="  \"trustProxy\": true,"
+    [ "$INSECURE_PLAINTEXT" = "1" ] && tl_insec_line="  \"insecurePlaintext\": true,"
     cat > "$CONFIG_FILE" <<EOF
 {
   "port": $PORT,
@@ -533,11 +734,16 @@ run_install() {
       "enabled": true
     }
   ],
+  "tlsMode": "$tls_mode",
+$tl_cert_line
+$tl_key_line
+$tl_trust_line
+$tl_insec_line
   "sessionTtlHours": $SESSION_TTL_HOURS
 }
 EOF
     chmod 600 "$CONFIG_FILE"
-    ok "wrote $CONFIG_FILE (0600, port $PORT — token-free)"
+    ok "wrote $CONFIG_FILE (0600, port $PORT — token-free, tlsMode $tls_mode)"
     # Gateway token(s) + bootstrap admin password → dedicated 0600 secrets file.
     # These never appear in config, backups, or release tarballs (plan item 3).
     cat > "$SECRETS_FILE" <<EOF
@@ -552,6 +758,14 @@ EOF
     ok "wrote $SECRETS_FILE (0600) — gateway token(s) + bootstrap admin password"
   else
     info "$CONFIG_FILE exists — keeping it"
+    # Apply TLS/exposure flags to an existing config so they work without
+    # --force-config (plan item 5).
+    if [ -n "$DOMAIN" ] || [ -n "$TLS_CERT" ] || [ "$INSECURE_PLAINTEXT" = "1" ]; then
+      config_patch "bind=$BIND" "tlsMode=$tls_mode" "trustProxy=$trust_proxy" \
+        "tlsCert=$TLS_CERT" "tlsKey=$TLS_KEY" \
+        "insecurePlaintext=$([ "$INSECURE_PLAINTEXT" = "1" ] && echo true || echo '')"
+      ok "updated $CONFIG_FILE: tlsMode=$tls_mode, bind=$BIND${DOMAIN:+ (https://$DOMAIN)}"
+    fi
   fi
 
   # ── state files (pre-create so Docker binds FILES, not dirs) ────────────
@@ -609,7 +823,7 @@ EOF
       umask 177
       cat > "$CRED_FILE" <<EOF
 # $APP_NAME — install credentials  ($(date -Is))
-url:      http://$(hostname -I 2>/dev/null | awk '{print $1}'):$port_cfg/
+url:      $([ -n "$DOMAIN" ] && echo "https://$DOMAIN/" || echo "http://$(hostname -I 2>/dev/null | awk '{print $1}'):$port_cfg/")
 user:     admin
 password: $admin_pw
 gateway:  $GATEWAY_URL
@@ -619,6 +833,12 @@ EOF
     fi
   else
     info "admin account already exists — leaving credentials untouched"
+  fi
+
+  # ── TLS reverse proxy (plan item 5) ─────────────────────────────────────
+  # --domain wires Caddy for automatic certs in front of the loopback portal.
+  if [ -n "$DOMAIN" ]; then
+    setup_caddy "$DOMAIN" "$port_cfg"
   fi
 
   # ── device approval ─────────────────────────────────────────────────────
@@ -662,10 +882,15 @@ print(walk(data) or '')
   # ── firewall ────────────────────────────────────────────────────────────
   if [ "$DO_FIREWALL" = "1" ]; then
     if have ufw && ufw status 2>/dev/null | grep -q "Status: active"; then
-      "${SUDO_CMD[@]}" ufw allow "$port_cfg/tcp" >/dev/null 2>&1 \
-        && ok "ufw: allowed $port_cfg/tcp" || warn "ufw rule failed — add manually: sudo ufw allow $port_cfg/tcp"
+      if [ -n "$DOMAIN" ]; then
+        "${SUDO_CMD[@]}" ufw allow 80/tcp  >/dev/null 2>&1 && "${SUDO_CMD[@]}" ufw allow 443/tcp >/dev/null 2>&1 \
+          && ok "ufw: allowed 80,443/tcp (TLS)" || warn "ufw rules failed — add manually: sudo ufw allow 80,443/tcp"
+      else
+        "${SUDO_CMD[@]}" ufw allow "$port_cfg/tcp" >/dev/null 2>&1 \
+          && ok "ufw: allowed $port_cfg/tcp" || warn "ufw rule failed — add manually: sudo ufw allow $port_cfg/tcp"
+      fi
     else
-      warn "--firewall given but ufw is not active — add the rule manually: sudo ufw allow $port_cfg/tcp"
+      warn "--firewall given but ufw is not active — add the rule manually: sudo ufw allow ${port_cfg}${DOMAIN:+,80,443}/tcp"
     fi
   fi
 
@@ -675,7 +900,7 @@ print(walk(data) or '')
   echo "" | tee -a "$LOG_FILE"
   log "══════════════════════════════════════════════════════════"
   log "  $APP_NAME v$VERSION — install complete"
-  log "  URL:      http://${ip:-<server-ip>}:$port_cfg/"
+  log "  URL:      $([ -n "$DOMAIN" ] && echo "https://$DOMAIN/" || echo "http://${ip:-<server-ip>}:$port_cfg/")"
   if [ -n "$admin_pw" ]; then
     log "  login:    admin / $admin_pw"
     log "            (also saved in $CRED_FILE — keep it safe)"

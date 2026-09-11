@@ -20,6 +20,7 @@
 'use strict';
 
 const http = require('http');
+const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -58,9 +59,16 @@ const DEFAULTS = {
   sessionTtlHours: 12,
   reconnectBaseMs: 1000,
   reconnectMaxMs: 30000,
-  // TLS intent recorded by the first-run wizard (actual termination lands in
-  // plan item 5). 'off' | 'auto' | 'manual'.
+  // TLS / reverse-proxy (plan item 5). `tlsMode` records operator intent:
+  //   'off'    — plaintext only (loopback, or an explicitly-insecure public bind)
+  //   'auto'   — TLS terminated by a reverse proxy (Caddy handles the certs)
+  //   'manual' — TLS terminated by an operator-managed proxy, or served
+  //              directly here when tlsCert + tlsKey are configured
   tlsMode: 'off',
+  tlsCert: '',             // PEM cert path — with tlsKey the portal serves HTTPS
+  tlsKey: '',              // PEM private-key path
+  trustProxy: false,       // trust X-Forwarded-Proto from a TLS-terminating proxy
+  insecurePlaintext: false,// explicit opt-out of the public-bind TLS gate
 };
 
 // ── Credential safety ────────────────────────────────────────────────────────
@@ -186,6 +194,9 @@ function loadConfig() {
     SESSION_TTL_HOURS: 'sessionTtlHours',
     RECONNECT_BASE_MS: 'reconnectBaseMs',
     RECONNECT_MAX_MS: 'reconnectMaxMs',
+    PORTAL_TLS_MODE: 'tlsMode',
+    PORTAL_TLS_CERT: 'tlsCert',
+    PORTAL_TLS_KEY: 'tlsKey',
   };
   for (const [envKey, cfgKey] of Object.entries(envMap)) {
     if (process.env[envKey] !== undefined) {
@@ -194,10 +205,60 @@ function loadConfig() {
       cfg[cfgKey] = v;
     }
   }
+  // Boolean flags (env presence overrides the file).
+  if (process.env.PORTAL_TRUST_PROXY !== undefined) cfg.trustProxy = truthyEnv(process.env.PORTAL_TRUST_PROXY);
+  if (process.env.PORTAL_INSECURE_PLAINTEXT !== undefined) cfg.insecurePlaintext = truthyEnv(process.env.PORTAL_INSECURE_PLAINTEXT);
   return cfg;
 }
 
+function truthyEnv(v) { return typeof v === 'string' && /^(1|true|yes)$/i.test(v.trim()); }
+
 const CONFIG = loadConfig();
+
+// ── TLS + reverse-proxy policy (plan item 5) ─────────────────────────────────
+// Public-readiness rule: the portal must never serve cleartext on a public
+// interface. Loopback is always fine. A public bind must either terminate TLS
+// itself (tlsCert + tlsKey), sit behind a TLS-terminating proxy
+// (trustProxy, or tlsMode 'auto'/'manual'), or be explicitly declared
+// insecure (`--insecure-plaintext` / PORTAL_INSECURE_PLAINTEXT=1).
+const LOOPBACK_RE = /^(127(\.\d+){3}|::1|localhost)$/i;
+function isLoopbackBind(b) {
+  return LOOPBACK_RE.test(String(b || '').trim().replace(/^\[|\]$/g, ''));
+}
+function readPem(p) { try { return p ? fs.readFileSync(p) : null; } catch { return null; } }
+
+const TLS_CERT = readPem(CONFIG.tlsCert);
+const TLS_KEY = readPem(CONFIG.tlsKey);
+// The portal terminates TLS itself when a usable cert + key are configured.
+const SERVING_TLS = !!(TLS_CERT && TLS_KEY);
+// A reverse proxy terminates TLS in front of us (Caddy for tlsMode:'auto').
+const TRUST_PROXY = CONFIG.trustProxy === true || truthyEnv(process.env.PORTAL_TRUST_PROXY)
+  || CONFIG.tlsMode === 'auto' || (CONFIG.tlsMode === 'manual' && !SERVING_TLS);
+// Secure context → `Secure` cookies + HSTS response headers.
+const SECURE_CONTEXT = SERVING_TLS || TRUST_PROXY;
+
+function assertTlsPolicy() {
+  if (isLoopbackBind(CONFIG.bind)) return;   // local-only — fine
+  if (SERVING_TLS) return;                   // we terminate TLS
+  if (TRUST_PROXY) return;                   // a proxy terminates TLS
+  if (CONFIG.insecurePlaintext === true || truthyEnv(process.env.PORTAL_INSECURE_PLAINTEXT)) {
+    console.warn(`[portal] ⚠ INSECURE-PLAINTEXT — binding ${CONFIG.bind} WITHOUT TLS. Traffic is cleartext and can be read or modified on the wire.`);
+    console.warn('[portal]   Acceptable on a trusted LAN or behind a tunnel — NEVER expose this to the public internet.');
+    return;
+  }
+  if (process.env.PORTAL_ALLOW_INSECURE_DEFAULTS === '1') {
+    console.warn(`[portal] ⚠ PORTAL_ALLOW_INSECURE_DEFAULTS=1 — allowing cleartext public bind ${CONFIG.bind} (dev only).`);
+    return;
+  }
+  console.error(`[portal] FATAL: refusing to bind ${CONFIG.bind} without TLS.`);
+  console.error('[portal] Choose one:');
+  console.error('[portal]   • automatic HTTPS:       ./install.sh install --domain portal.example.com   (Caddy)');
+  console.error('[portal]   • bring your own certs:  set tlsMode:"manual" + tlsCert + tlsKey');
+  console.error('[portal]   • TLS-terminating proxy: set trustProxy:true (or tlsMode:"auto") behind nginx/Caddy');
+  console.error('[portal]   • local only:            bind 127.0.0.1');
+  console.error('[portal]   • explicit opt-out:      --insecure-plaintext / PORTAL_INSECURE_PLAINTEXT=1  (NOT for public hosts)');
+  process.exit(1);
+}
 
 // ── Secrets at rest (plan item 3) ───────────────────────────────────────────
 // Gateway tokens (and the optional first-run bootstrap password) live in a
@@ -350,6 +411,10 @@ function saveConfig() {
       })),
       sessionTtlHours: CONFIG.sessionTtlHours,
       tlsMode: CONFIG.tlsMode || 'off',
+      tlsCert: CONFIG.tlsCert || undefined,
+      tlsKey: CONFIG.tlsKey || undefined,
+      trustProxy: CONFIG.trustProxy === true ? true : undefined,
+      insecurePlaintext: CONFIG.insecurePlaintext === true ? true : undefined,
     };
     if (fs.existsSync(CONFIG_PATH)) {
       try { fs.copyFileSync(CONFIG_PATH, CONFIG_PATH + '.bak'); } catch (e) { /* noop */ }
@@ -1110,6 +1175,13 @@ function completeSetup(body) {
   }
 
   const tlsMode = ['off', 'auto', 'manual'].includes(body.tlsMode) ? body.tlsMode : (CONFIG.tlsMode || 'off');
+
+  // A public bind without TLS is refused at boot (plan item 5). Catch it here so
+  // the operator fixes it in the wizard instead of bricking the next restart.
+  const willBind = bind !== null ? bind : CONFIG.bind;
+  if (!isLoopbackBind(willBind) && tlsMode === 'off') {
+    return { error: 'a public bind address requires TLS — choose Automatic or Manual TLS, or bind 127.0.0.1' };
+  }
 
   // Optional first gateway — validated before anything is committed.
   let gateway = null;
@@ -1897,7 +1969,10 @@ function normalizeMessage(m) {
 }
 
 // ── HTTP server ─────────────────────────────────────────────────────────────
-const server = http.createServer((req, res) => {
+const requestListener = (req, res) => {
+  // HSTS whenever we are in a secure context — direct TLS, or a trusted proxy
+  // terminates it. Browsers ignore it over plaintext (plan item 5).
+  if (SECURE_CONTEXT) res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
 
   // Static UI
@@ -1927,7 +2002,13 @@ const server = http.createServer((req, res) => {
 
   res.writeHead(404, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ error: 'not found' }));
-});
+};
+
+// Serve HTTPS directly when a cert + key are configured, else plain HTTP for
+// loopback / behind a TLS-terminating reverse proxy (plan item 5).
+const server = SERVING_TLS
+  ? https.createServer({ cert: TLS_CERT, key: TLS_KEY }, requestListener)
+  : http.createServer(requestListener);
 
 function serveFile(file, type, res) {
   fs.readFile(file, (err, data) => {
@@ -1963,6 +2044,15 @@ function json(res, status, obj) {
   res.end(JSON.stringify(obj));
 }
 
+// Session cookie: always HttpOnly + SameSite=Strict; adds `Secure` whenever the
+// request reached us over TLS (directly or via a trusted proxy) — plan item 5.
+function sessionCookie(value, maxAge) {
+  const parts = [`portal_session=${value}`, 'Path=/', 'HttpOnly', 'SameSite=Strict'];
+  if (SECURE_CONTEXT) parts.push('Secure');
+  parts.push(`Max-Age=${maxAge}`);
+  return parts.join('; ');
+}
+
 function requireRole(user, role) {
   return user && (ROLES[user.role] || 0) >= ROLES[role];
 }
@@ -1983,7 +2073,7 @@ async function handleApi(req, res, url) {
     }
     res.writeHead(200, {
       'Content-Type': 'application/json',
-      'Set-Cookie': `portal_session=${result.session}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${CONFIG.sessionTtlHours * 3600}`,
+      'Set-Cookie': sessionCookie(result.session, CONFIG.sessionTtlHours * 3600),
     });
     return res.end(JSON.stringify({ ok: true, user: result.user, restartRequired: result.restartRequired, config: result.config }));
   }
@@ -2017,7 +2107,7 @@ async function handleApi(req, res, url) {
     audit('login', u.username, u.role);
     res.writeHead(200, {
       'Content-Type': 'application/json',
-      'Set-Cookie': `portal_session=${tok}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${CONFIG.sessionTtlHours * 3600}`,
+      'Set-Cookie': sessionCookie(tok, CONFIG.sessionTtlHours * 3600),
     });
     return res.end(JSON.stringify({ ok: true, user: publicUser(u) }));
   }
@@ -2031,7 +2121,7 @@ async function handleApi(req, res, url) {
         sessions.delete(c.slice('portal_session='.length));
       }
     }
-    res.writeHead(200, { 'Content-Type': 'application/json', 'Set-Cookie': 'portal_session=; Path=/; HttpOnly; Max-Age=0' });
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Set-Cookie': sessionCookie('', 0) });
     return res.end(JSON.stringify({ ok: true }));
   }
 
@@ -2669,10 +2759,22 @@ async function handleApi(req, res, url) {
 }
 
 // ── Main ────────────────────────────────────────────────────────────────────
+// Refuses to bind a public interface in cleartext unless explicitly allowed.
+assertTlsPolicy();
+const SCHEME = SERVING_TLS ? 'https' : 'http';
 server.listen(CONFIG.port, CONFIG.bind, () => {
   console.log(`🟠 ${BRAND.product} — ${BRAND.tagline}`);
   console.log(`   ${BRAND.family} · engine: ${BRAND.engine} · ${BRAND.slug}`);
-  console.log(`   http://${CONFIG.bind}:${CONFIG.port}  (LAN: http://<this-host>:${CONFIG.port})`);
+  console.log(`   ${SCHEME}://${CONFIG.bind}:${CONFIG.port}  (LAN: ${SCHEME}://<this-host>:${CONFIG.port})`);
+  if (SERVING_TLS) {
+    console.log(`   tls:     ON (served directly) — cert ${CONFIG.tlsCert}`);
+  } else if (TRUST_PROXY) {
+    console.log(`   tls:     terminated by a reverse proxy (tlsMode ${CONFIG.tlsMode}) — Secure cookies + HSTS on`);
+  } else if (isLoopbackBind(CONFIG.bind)) {
+    console.log('   tls:     off (loopback only — reachable from this host)');
+  } else {
+    console.log('   tls:     ⚠ OFF — explicit insecure-plaintext public bind');
+  }
   for (const g of GATEWAYS) console.log(`   gateway ${g.id} (${g.name}): ${g.cfg.url}`);
   {
     const withTok = CONFIG.gateways.filter(g => g.token).length;
@@ -2684,9 +2786,10 @@ server.listen(CONFIG.port, CONFIG.bind, () => {
   console.log(`   users:   ${USERS.length} account(s) — ${USERS.filter(u => u.role === 'admin').length} admin, ${USERS.filter(u => u.role === 'instructor').length} instructor, ${USERS.filter(u => u.role === 'student').length} student`);
   if (SETUP_REQUIRED) {
     console.log('   setup:   REQUIRED — no accounts yet. Open the wizard to create the first admin:');
-    console.log(`            http://${CONFIG.bind === '0.0.0.0' ? '<this-host>' : CONFIG.bind}:${CONFIG.port}/setup`);
+    console.log(`            ${SCHEME}://${CONFIG.bind === '0.0.0.0' ? '<this-host>' : CONFIG.bind}:${CONFIG.port}/setup`);
     console.log('            (all other routes are refused until setup completes — there is no default login)');
   }
+  console.log('   ready.');
 });
 server.on('error', (e) => {
   console.error('[portal] http server error:', e.message);
