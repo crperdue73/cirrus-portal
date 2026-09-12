@@ -12,7 +12,7 @@
 #    ./secret-scan.sh --dir DIR       # scan a staged directory
 #    ./secret-scan.sh --tar FILE      # extract + scan a release tarball
 #
-#  Runs in CI via .github/workflows/secret-scan.yml.
+#  Runs in CI via .github/workflows/ci.yml (the secret-scan job).
 # ═══════════════════════════════════════════════════════════════════════════
 set -uo pipefail
 

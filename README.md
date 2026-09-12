@@ -194,6 +194,24 @@ Browser ──HTTP/SSE──▶ portal-server.js ──WebSocket (loopback)─�
 
 ---
 
+## Development
+
+There is no build step and no third-party toolchain — the portal is plain Node
+plus a static UI. The repo ships its own checks:
+
+```bash
+./run-tests.sh    # node:test suite (auth, RBAC, rooms, config, route smoke) + smoke tests
+./lint.sh         # JS/shell syntax, JSON validity, line endings
+./release.sh      # build dist/cirrus-portal-<version>.tar.gz + SHA256SUMS
+./secret-scan.sh  # grep the repo (or a built tarball) for leaked secrets
+```
+
+CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs **lint → test →
+secret-scan** on every push and pull request, then builds and uploads the
+versioned release artifact.
+
+---
+
 ## Documentation
 
 | Doc | What it covers |

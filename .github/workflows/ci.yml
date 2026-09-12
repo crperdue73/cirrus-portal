@@ -1,0 +1,75 @@
+name: ci
+
+# Cirrus Portal — plan item 13. The single CI entrypoint:
+#   lint → test → secret-scan → build the release artifact.
+# Runs on every push (branches + tags) and on pull requests.
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Lint (syntax + JSON + line endings)
+        run: ./lint.sh
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Full test suite (node:test + smoke tests)
+        run: ./run-tests.sh
+
+  secret-scan:
+    name: secret-scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Scan the repository for secrets
+        run: ./secret-scan.sh
+      - name: Build the release tarball and scan it too
+        run: |
+          ./release.sh
+          ./secret-scan.sh --tar "$(ls -1 dist/*.tar.gz | head -1)"
+
+  build:
+    name: build-release-artifact
+    needs: [lint, test, secret-scan]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build the versioned release tarball + checksums
+        run: ./release.sh
+      - name: Verify the checksums
+        run: cd dist && sha256sum -c SHA256SUMS
+      - name: Upload the release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cirrus-portal-release
+          path: |
+            dist/*.tar.gz
+            dist/SHA256SUMS
+          if-no-files-found: error
