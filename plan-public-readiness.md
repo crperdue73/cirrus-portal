@@ -85,7 +85,7 @@
   Verified release script: signed checksums, `CHANGELOG.md`, semver tags, an SBOM,
   a reproducible tarball, and a written publish checklist.
 
-- [ ] **15. Migration + upgrade path.**
+- [x] **15. Migration + upgrade path.** ✅ 2026-09-12
   A 2.x → 3.x migrator (credential rotation, config-schema migration, role model)
   with `--dry-run` and backup-first, tested against a copy of real state.
 
@@ -451,3 +451,33 @@
   **Note:** this run only *builds* releases locally — no tag was pushed (there is no remote) and
   nothing was published; signing keys are per-machine (`RELEASE_GPG_KEY`) and the publish step stays
   gated on Dad (item 20). No live deploy this run.
+- **2026-09-12** — ✅ **Item 15 done.** Migration + upgrade path. Added **`migrate.js`**
+  (zero-dep, Node 22 builtins) — the **2.x → 3.x migrator** — wrapped by **`./install.sh migrate`**.
+  It does the whole transformation in one backup-first pass: **(config schema)** moves legacy
+  plaintext gateway tokens + the legacy `portalPassword` out of `portal-config.json` into
+  `portal-secrets.json` (0600), synthesizes a `gateways` entry from legacy `gatewayUrl` if needed,
+  adds the 3.x keys (`publicBind`/`tlsMode`/`trustProxy`/`sessionIdleMinutes`/login-limit trio),
+  and **stamps `schemaVersion: 3`**; **(credentials)** rotates any account still on a known-default
+  password to a fresh strong one written to `portal-credentials.txt` (0600) — verified by re-hashing
+  old vs new; **(role model)** maps legacy aliases (`teacher`/`owner`/`ta`/`grader`/…) to
+  `student|instructor|admin`, lowers usernames, and normalizes `agents`/`assignments`; **(safe
+  network)** a 2.x cleartext public bind **fails closed to loopback** unless re-exposed deliberately
+  via `--domain` (auto TLS) / `--tls-cert`+`--tls-key` / `--allow-insecure-plaintext`. `--dry-run`
+  reads + plans but writes nothing. **Backup-first:** a full reversible snapshot
+  (`backups/migrate-<stamp>/`, 0700, *includes secrets*) is written before any change; exit 2 =
+  already on schema 3 (idempotent). `portal-server.js` now persists the `schemaVersion` stamp
+  (`DEFAULTS` + `saveConfig`), and `release.sh` ships `migrate.js`. Docs: UPGRADING.md §6 rewritten
+  around the real migrator; README/ADMIN/CHANGELOG updated. Evidence: `node --check` + `bash -n` clean
+  via `./lint.sh` (25 JS · 6 sh); new **`test-migrate.js` 8/8** (dry-run is byte-identical/no-secrets/
+  no-snapshot · live run → schema 3 + tokens→secrets + role map + rotation + 0700 snapshot ·
+  idempotent second run exit 2 · `--domain`/`--tls-cert` safe re-expose · `--allow-insecure-plaintext`
+  keeps a deliberate public bind · default-password list matches `portal-server.js` · **the migrated
+  state actually boots the real `portal-server.js`** (HTTP 200, no boot-guard FATAL) ·
+  **migrates a COPY of the real repo state**); `./run-tests.sh` all green (19 node:test + 13 standalone
+  suites, **91 checks** incl. migrate 8/8); `./secret-scan.sh` clean on the repo AND on the freshly
+  built `dist/cirrus-portal-2.2.0.tar.gz` (which now carries `migrate.js`). Commit `e7ac206`.
+  **Note:** docs/code/test only — no live deploy. **FOLLOW-UP (quiet window + Dad's OK):** the LIVE box
+  still runs the legacy 2.x state (bind `0.0.0.0`, cleartext, `portalPassword: perdue-portal-2026` in
+  config, `admin`/`admin`). A `--dry-run` against the real state plans **12 changes** and rotates 3
+  accounts; running it for real + `./install.sh upgrade` is a deliberate live migration to schedule,
+  not something to do mid-day. Nothing was changed on the live box this run.
