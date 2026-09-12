@@ -68,7 +68,7 @@
   rollback on failure, extended preflight (DNS, TLS reachability, firewall, port),
   and a `--dry-run` that prints the exact plan.
 
-- [ ] **11. License + legal.**
+- [x] **11. License + legal.** ✅ 2026-09-12 (Apache-2.0 — Dad's call)
   Check the family/Cirrus licensing model first, then add `LICENSE`,
   third-party notices, `SECURITY.md` (disclosure policy), and acceptable-use
   terms for public hosts.
@@ -335,3 +335,30 @@
   from Dad. Per the plan's own rule the box stays unticked and nothing was authored (no `LICENSE`/terms).
   **Standing block — subsequent runs will NOT add duplicate BLOCKED entries until Dad decides;** refer to the
   2026-09-11 16:42 note above for the exact decisions needed. Item 12+ remain intentionally gated behind this.
+- **2026-09-12** — ✅ **Item 11 done (unblocked by Dad).** Dad's decisions: **Apache-2.0**,
+  copyright holder **`Copyright 2026 CRPerdue Technologies, LLC`**, and authorization to
+  publish `SECURITY.md` once I judged it complete. **Blocker check first:** I ran the item's
+  first step and confirmed there is **no obstacle to Apache-2.0** — the shipped tree has
+  **zero third-party code** (no `package.json`, no `node_modules/`, no vendored/forked source;
+  every `require()` in `portal-server.js` is a Node builtin: crypto/fs/http/https/path). The
+  only external input is the pinned `node:22-alpine` base image (Node MIT · musl MIT · BusyBox
+  GPL-2.0 as an *aggregate*, pulled not redistributed, no linking) — no copyleft conflict.
+  Authored: **`LICENSE`** (verbatim Apache-2.0 + appendix filled with the LLC), **`NOTICE`**
+  (attribution + Cirrus trademark reservation, Apache-2.0 §6 grants no marks — the one real
+  trade-off vs proprietary), **`THIRD-PARTY-NOTICES.md`** (SBOM-style dependency inventory:
+  zero bundled third-party code), **`SECURITY.md`** (supported versions, private channel
+  `security@crperdue.com`, 3/5-day ack/triage targets + 90-day coordinated disclosure,
+  in/out-of-scope, safe harbor), **`ACCEPTABLE-USE.md`** (public-host operator baseline +
+  prohibited uses + enforcement). Wired: `release.sh FILES` now ships all five; README gains a
+  **License & legal** section. New **`test-legal.js`** (6 checks — Apache text + holder + no
+  placeholders · NOTICE/trademark · **verifies the zero-dep claim against reality** (no
+  manifest, no node_modules, builtins-only requires) · SECURITY.md completeness · AUP baseline ·
+  ships + README links). Evidence: `node --check` + `bash -n` clean; **`test-legal.js` 6/6**;
+  regressions green (credentials 3/3, secrets 3/3, setup 3/3, tls 6/6, network 6/6, auth 5/5,
+  container 6/6, docs 5/5); `secret-scan.sh` clean on the repo **and** the freshly built
+  `dist/cirrus-portal-2.2.0.tar.gz` (which now carries all five legal files). Contact-address
+  deliverability probed: SMTP RCPT for `security@crperdue.com` → **250 Accepted**. Docs-only —
+  no code/runtime change, no live deploy. Commit `9715928`.
+  **Caveat for Dad:** the RCPT probe proves the mail server accepts that address, not that a
+  human reads the inbox (it could be a catch-all). If there's no real `security@` mailbox yet,
+  tell me and I'll point the policy at one that exists.
