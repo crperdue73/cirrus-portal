@@ -73,7 +73,7 @@
   third-party notices, `SECURITY.md` (disclosure policy), and acceptable-use
   terms for public hosts.
 
-- [ ] **12. Public documentation set.**
+- [x] **12. Public documentation set.** ✅ 2026-09-12
   Rewrite `README.md` as a public quickstart; add `ADMIN.md` (ops runbook),
   `THREAT-MODEL.md`, `UPGRADING.md`, `TROUBLESHOOTING.md`, and a screenshot pass.
 
@@ -362,3 +362,30 @@
   **Caveat for Dad:** the RCPT probe proves the mail server accepts that address, not that a
   human reads the inbox (it could be a catch-all). If there's no real `security@` mailbox yet,
   tell me and I'll point the policy at one that exists.
+- **2026-09-12** — ✅ **Item 12 done.** Public documentation set. **Rewrote `README.md`** from an
+  internal dev-log into a public **quickstart**: what it is, feature list, quickstart (scp → `./install.sh
+  install`), no-default-credentials statement, TLS/public-exposure, ops command table, config +
+  secrets, roles, architecture, a docs index, and the (kept) License & legal section — all internal
+  content (Dad's roadmap, CI30, Phase-I log) removed. Added four operator docs: **`ADMIN.md`**
+  (day-2 runbook — command surface, install, health, backup/restore, secrets, users, gateways, TLS,
+  routine ops, incident basics), **`THREAT-MODEL.md`** (assets · trust boundaries · adversaries ·
+  threats/controls/residual risk per area · out-of-scope/accepted · hardening checklist), plain-text ASCII
+  diagram, **`UPGRADING.md`** (version scheme, standard upgrade, the three 3.x defaults that can stop a
+  2.x box booting, an ordered live 2.x→3.x drill, rollback, an automated-migrator note for item 15),
+  **`TROUBLESHOOTING.md`** (symptom→cause→fix tables: install/boot, intentional boot gates, login/accounts,
+  agents/chat, TLS, container/storage, backups, escalation). **Screenshot pass:** captured **8 real PNGs**
+  (login · agents/chat · dashboard · rooms · users · gateways · audit · student view) from a throwaway
+  loopback demo instance (mock gateway `labbot`/`grader`) — *not* the live box, which still runs legacy code
+  whose login still advertises `admin/admin`. Shipped a **reproducible** `docs/screenshots/{capture.js,seed-demo.js,README.md}`
+  (dependency-free: Node 22 built-in WebSocket drives headless Chromium over CDP; idempotent seeder).
+  Wired all new docs + screenshots into `release.sh FILES`; README embeds the chat screenshot and indexes
+  every doc. Evidence: `node --check` (test + capture + seed + server) and `bash -n` (4 scripts) clean; new
+  **`test-public-docs.js` 8/8** (README-is-a-quickstart · ADMIN sections · THREAT-MODEL coverage · UPGRADING
+  backup-first+2.x→3.x · TROUBLESHOOTING topics · 8 valid non-blank PNGs + scripts · ships in tarball ·
+  **no internal/personal strings leak into the public docs**); regressions green: docs 5/5, legal 6/6,
+  credentials 3/3, secrets 3/3, setup 3/3, tls 6/6, network 6/6, auth 5/5, container 6/6; `secret-scan.sh`
+  clean on the repo **and** the freshly built `dist/cirrus-portal-2.2.0.tar.gz` (640K, now carrying the four
+  docs + 8 PNGs + scripts). Commit `d0384ba`; docs-only — no code/runtime change, no live deploy.
+  **Note:** the dashboard renders “1 students” (pluralization bug) — a small UI nit left for a later item;
+  not in scope here. (`REPLICATION.md` still carries an old systemd/`agent-portal` fallback section and the
+  `agent-portal.service` unit name is unchanged — out of scope for this docs item.)
