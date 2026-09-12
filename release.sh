@@ -46,8 +46,23 @@ FILES=(
   deploy/Caddyfile
   deploy/nginx/cirrus-portal.conf
   README.md
+  ADMIN.md
   REPLICATION.md
   DEPLOYMENT.md
+  UPGRADING.md
+  TROUBLESHOOTING.md
+  THREAT-MODEL.md
+  docs/screenshots/README.md
+  docs/screenshots/01-login.png
+  docs/screenshots/02-agents-chat.png
+  docs/screenshots/03-dashboard.png
+  docs/screenshots/04-rooms.png
+  docs/screenshots/05-users.png
+  docs/screenshots/06-gateways.png
+  docs/screenshots/07-audit.png
+  docs/screenshots/08-student-view.png
+  docs/screenshots/capture.js
+  docs/screenshots/seed-demo.js
   LICENSE
   NOTICE
   THIRD-PARTY-NOTICES.md
