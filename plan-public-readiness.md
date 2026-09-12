@@ -77,7 +77,7 @@
   Rewrite `README.md` as a public quickstart; add `ADMIN.md` (ops runbook),
   `THREAT-MODEL.md`, `UPGRADING.md`, `TROUBLESHOOTING.md`, and a screenshot pass.
 
-- [ ] **13. Test suite + CI.**
+- [x] **13. Test suite + CI.** ✅ 2026-09-12
   Node test-runner coverage for auth, RBAC, rooms, config, and route smoke tests;
   GitHub Actions running test + lint + build + release-artifact job on push/tag.
 
@@ -389,3 +389,34 @@
   **Note:** the dashboard renders “1 students” (pluralization bug) — a small UI nit left for a later item;
   not in scope here. (`REPLICATION.md` still carries an old systemd/`agent-portal` fallback section and the
   `agent-portal.service` unit name is unchanged — out of scope for this docs item.)
+- **2026-09-12** — ✅ **Item 13 done.** Test suite + CI. Added a **`node:test`-runner
+  suite** under `test/` with a zero-dependency harness (`test/helpers.js`) that boots the *real*
+  `portal-server.js`
+  in a throwaway temp dir (temp state + seeded users + free port) and drives it over HTTP with
+  cookie+CSRF awareness: **auth** (bad login → 401 · CSRF required on writes, reads exempt · session
+  id rotates on login so a planted cookie dies · `logout-all` revokes both sessions · 3 failures →
+  429 + `Retry-After`, correct pw refused while locked · password policy enforced on user create),
+  **RBAC** (student denied users/rooms/audit/gateways/dashboard but allowed agents · instructor sees
+  only students + dashboard/rooms but not create/audit/gateways · admin sees all · anon → 401),
+  **rooms** (create→list→get→message→delete lifecycle · validation: missing name/agents, >12 agents,
+  free-mode <2 agents · only creator/admin may delete · 404 on missing), **config** (`PORT` env
+  overrides the file port and the file port is NOT bound · `sessionTtlHours` → cookie
+  `Max-Age=10800` · gateway config → offline server, no invented agents · example config is valid
+  JSON with known keys only), and **route smoke** (`/`, `/setup`, `/nexus`, JSON 404, `/api/me`
+  public, protected → 401, `OPTIONS` → 204, and the first-run SETUP funnel: `/` → 302 `/setup`,
+  login/me → 503 `setupRequired`, `/api/setup/status` reports the wizard). Added **`run-tests.sh`**
+  (runs `node --test test/*.test.js` **plus** every standalone `test-*.js`) and **`lint.sh`**
+  (`node --check` on 22 JS files · `bash -n` on 6 scripts · JSON validity · CRLF guard). Added
+  **`.github/workflows/ci.yml`** — one pipeline: **lint → test → secret-scan → build-release-artifact**
+  (`release.sh` + `sha256sum -c` + `upload-artifact`), running on every push (branches + `v*` tags)
+  and PR; it **replaces** `.github/workflows/secret-scan.yml` (folded in, as that file's own note
+  said item 13 would). README gained a **Development** section documenting the four dev commands.
+  Evidence: `./lint.sh` clean; **`node --test test/*.test.js` → 19/19**; **`./run-tests.sh` → all
+  green** (19 node:test + the 11 standalone suites: credentials 3/3, secrets 3/3, setup 3/3, tls
+  6/6, network 6/6, auth 5/5, container 6/6, installer 8/8, docs 5/5, legal 6/6, public-docs 8/8);
+  `./secret-scan.sh` clean on the repo AND on the freshly built `dist/cirrus-portal-2.2.0.tar.gz`
+  (confirmed the tarball still ships **no** `test/`, `run-tests.sh`, `lint.sh`, or `.github/` — tests
+  are dev-only). Commit `cc0fd86`.
+  **Note:** tests are not shipped in the release tarball (dev-only, by design); the CI artifact job
+  runs on GitHub-hosted runners and will exercise the workflow on the next push. No live deploy this
+  run — nothing here touches the running box.
