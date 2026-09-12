@@ -81,7 +81,7 @@
   Node test-runner coverage for auth, RBAC, rooms, config, and route smoke tests;
   GitHub Actions running test + lint + build + release-artifact job on push/tag.
 
-- [ ] **14. Release engineering.**
+- [x] **14. Release engineering.** ✅ 2026-09-12
   Verified release script: signed checksums, `CHANGELOG.md`, semver tags, an SBOM,
   a reproducible tarball, and a written publish checklist.
 
@@ -420,3 +420,34 @@
   **Note:** tests are not shipped in the release tarball (dev-only, by design); the CI artifact job
   runs on GitHub-hosted runners and will exercise the workflow on the next push. No live deploy this
   run — nothing here touches the running box.
+- **2026-09-12** — ✅ **Item 14 done.** Release engineering. `release.sh` now builds a
+  **reproducible** distribution and the surrounding release machinery is written down.
+  **Reproducible tarball:** staged tree is mode-normalized, then tarred with
+  `--sort=name --mtime=<SOURCE_DATE_EPOCH> --owner=0 --group=0 --numeric-owner` piped into
+  `gzip -n -9`; the build clock prefers `SOURCE_DATE_EPOCH`, else the last commit time — never
+  "now". **SBOM:** a CycloneDX 1.5 `dist/cirrus-portal-<ver>.sbom.json` generated per build
+  (product + Apache-2.0 license + the digest-pinned `node:22-alpine` base image read from the
+  Dockerfile + the Node runtime; declares zero bundled third-party code). **Signed checksums:**
+  `SHA256SUMS` covers the tarball + SBOM; `RELEASE_GPG_KEY` produces a detached-armor
+  `SHA256SUMS.asc`, and `REQUIRE_SIGN=1` makes an unsigned build **fail** (the default unsigned
+  build warns). **Semver tags:** `--tag` creates a local annotated `v<version>` tag (idempotent);
+  `--no-sign`, `--help` added. **`CHANGELOG.md`** (Keep a Changelog: `[Unreleased]`, `3.0.0`,
+  `2.2.0`, `2.1.0`) and **`RELEASING.md`** (the written publish checklist, steps 1–8 local/safe,
+  step 9 publish/announce explicitly gated on Dad's go-ahead) authored and added to `release.sh
+  FILES`; README gains the docs-index/Development entries. **Real bug found + fixed while testing:**
+  the reproducible flags were selected with `tar --help 2>/dev/null | grep -q -- '--sort='` — under
+  `set -o pipefail`, `grep -q` exits early, `tar` takes SIGPIPE (141), the pipeline reports failure,
+  and the flags were **silently dropped**, so roughly every first build produced an *unsorted*,
+  non-reproducible tarball. Replaced with a pipe-free captured-string `case` match. Evidence:
+  `node --check` (server+23 JS) + `bash -n` (6 scripts) clean via `./lint.sh`; new **`test-release.js`
+  8/8** (changelog shape · checklist completeness+approval gate · release.sh wiring + the pipefail
+  regression guard · **two builds hash-identical** + ships CHANGELOG/RELEASING and excludes
+  test/lint/run-tests/.github/state · SBOM valid CycloneDX 1.5 matching the pinned digest · REQUIRE_SIGN
+  refuses without a key **and** a throwaway ed25519 key yields a verifying `Good signature` · `--tag`
+  creates an annotated tag in a throwaway repo, idempotent · docs ship + README links); `./run-tests.sh`
+  **all green** (19 node:test + 12 standalone suites incl. release 8/8); `./secret-scan.sh` clean on the
+  repo AND the freshly built `dist/cirrus-portal-2.2.0.tar.gz` (which now carries `CHANGELOG.md` +
+  `RELEASING.md`). Commit `890f8b7`.
+  **Note:** this run only *builds* releases locally — no tag was pushed (there is no remote) and
+  nothing was published; signing keys are per-machine (`RELEASE_GPG_KEY`) and the publish step stays
+  gated on Dad (item 20). No live deploy this run.
