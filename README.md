@@ -562,3 +562,18 @@ appears in the transcript.
 8. ✅ **Mobile pass** (Aug 7 — responsive at ≤900px/≤520px: top-panel layout, horizontal agent strip, stacked dash columns; verified 0px horizontal scroll at 390/1280)
 
 Built by Noah, Aug 1 2026 (v1) · Aug 3 2026 (Phase I roles) · Aug 7 2026 (dashboard v1 + mobile pass — Phase I complete). Dad's ask: "a web chat portal that connects to agent:main for each agent, loads in a browser."
+
+## License & legal
+
+Cirrus Portal is licensed under the **Apache License, Version 2.0**.
+© 2026 CRPerdue Technologies, LLC.
+
+- [`LICENSE`](LICENSE) — Apache-2.0 full text
+- [`NOTICE`](NOTICE) — attribution + Cirrus trademark reservation
+- [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) — dependency inventory (zero bundled third-party code)
+- [`SECURITY.md`](SECURITY.md) — how to report a vulnerability, and what to expect
+- [`ACCEPTABLE-USE.md`](ACCEPTABLE-USE.md) — public-host baseline and prohibited uses
+
+"Cirrus", "Cirrus Portal", and "Cirrus Core" are trademarks of CRPerdue Technologies,
+LLC. The Apache-2.0 license grants no trademark rights, so forks may not present
+themselves under these names.
