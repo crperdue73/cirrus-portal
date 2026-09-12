@@ -126,6 +126,10 @@ $C_CYN Commands:$C_RST
   install     Detect, configure, build and run the portal (default).
               Safe to re-run — existing state and config are kept.
   upgrade     Rebuild the container from current code, keep all state.
+  migrate     Move a 2.x install onto the 3.x schema (safe, backup-first).
+              Rotates default credentials, relocates tokens into the 0600
+              secrets file, maps legacy roles, and reconciles the new
+              loopback/TLS defaults. Add --dry-run to preview only.
   status      Health check. Exit 0 = healthy, 1 = problems. Scriptable.
   doctor      Deep diagnostics (status + config, device, logs, disk).
   backup      Create a state+config snapshot tarball in ./backups/.
@@ -322,7 +326,7 @@ _i=0
 while [ "$_i" -lt "${#ARGS[@]}" ]; do
   arg="${ARGS[$_i]}"
   case "$arg" in
-    install|upgrade|status|doctor|backup|restore|uninstall|version) CMD="$arg" ;;
+    install|upgrade|migrate|status|doctor|backup|restore|uninstall|version) CMD="$arg" ;;
     --fresh) FRESH=1 ;;
     --force-config) FORCE_CONFIG=1 ;;
     --no-approve) DO_APPROVE=0 ;;
@@ -558,6 +562,27 @@ run_restore() {
   detect_docker
   compose up -d --build
   ok "done. Run ./install.sh status to confirm."
+}
+
+# ── migrate (2.x → 3.x, plan item 15) ────────────────────────────────────────
+# Thin wrapper around migrate.js: preview with --dry-run, then apply. Migration
+# is a pure file transform (no Docker) and takes its own reversible snapshot.
+run_migrate() {
+  have node || die "node is required for ./install.sh migrate (Node 22+)."
+  [ -f migrate.js ] || die "migrate.js not found next to install.sh"
+  local margs=()
+  [ "$DRY_RUN" = "1" ] && margs+=(--dry-run)
+  [ -n "$DOMAIN" ] && margs+=(--domain "$DOMAIN")
+  [ -n "$TLS_CERT" ] && [ -n "$TLS_KEY" ] && margs+=(--tls-cert "$TLS_CERT" --tls-key "$TLS_KEY")
+  [ "$PUBLIC_BIND" = "1" ] && [ "$INSECURE_PLAINTEXT" = "1" ] && margs+=(--allow-insecure-plaintext)
+  local rc=0
+  node migrate.js ${margs[@]+"${margs[@]}"} || rc=$?
+  case "$rc" in
+    0) [ "$DRY_RUN" = "1" ] || log "migrated. Rebuild when ready: ./install.sh upgrade" ;;
+    2) ok "already on the 3.x schema — nothing to migrate." ;;
+    *) die "migration failed (exit $rc) — state was not changed." ;;
+  esac
+  return 0
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1154,6 +1179,7 @@ case "$CMD" in
   doctor)    detect_docker; run_doctor ;;
   backup)    run_backup ;;
   restore)   run_restore ;;
+  migrate)   run_migrate ;;
   uninstall) run_uninstall ;;
   *) die "unknown command: $CMD (see --help)" ;;
 esac

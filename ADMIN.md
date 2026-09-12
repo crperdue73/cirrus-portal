@@ -19,6 +19,7 @@ contains `install.sh` and `portal-server.js`).
 ```
 ./install.sh install             # detect → configure → build → run
 ./install.sh upgrade             # rebuild from current code, keep all state
+./install.sh migrate [--dry-run] # 2.x → 3.x schema migration (backup-first, no Docker)
 ./install.sh status              # scriptable health check (exit 0 = healthy, 1 = problems)
 ./install.sh doctor              # deep diagnostics (status + config, device, logs, disk)
 ./install.sh backup              # state + config snapshot → ./backups/

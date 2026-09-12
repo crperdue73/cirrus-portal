@@ -45,6 +45,11 @@ box without shooting themselves in the foot.
 - **Release engineering (this item)** — reproducible tarball build, an SBOM,
   optional GPG-signed checksums, a `CHANGELOG.md`, semver tagging, and a written
   publish checklist (`RELEASING.md`).
+- **2.x → 3.x migrator** (`migrate.js` / `./install.sh migrate`) — backup-first,
+  `--dry-run`-able config-schema migration (legacy tokens + `portalPassword`
+  into `portal-secrets.json`, 3.x keys, `schemaVersion` stamp), known-default
+  credential rotation, legacy-role mapping, and fail-closed re-exposure of a
+  previously-cleartext public bind.
 
 ### Changed
 - **Official name: `Cirrus Portal`** (was "Agent Portal"). Slug/container
@@ -67,9 +72,10 @@ box without shooting themselves in the foot.
 ### Notes
 - Cirrus Portal is **single-tenant, self-hosted** — one organization per
   install. See `DEPLOYMENT.md`.
-- 2.x → 3.x upgrades: three new defaults (no default creds, loopback bind,
-  TLS-gated public exposure) can stop a legacy box from booting until it is
-  re-configured. See `UPGRADING.md`; an automated migrator lands in 3.x.
+- 2.x → 3.x upgrades: run `./install.sh migrate` (backup-first; `--dry-run` to
+  preview) before `./install.sh upgrade`. Three new defaults (no default creds,
+  loopback bind, TLS-gated public exposure) can stop a legacy box from booting
+  until it is reconciled. See `UPGRADING.md`.
 
 ## [2.2.0] — 2026-08-11
 

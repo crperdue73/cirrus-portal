@@ -110,6 +110,7 @@ Firewall: `--firewall` opens the right port(s) in `ufw`.
 ```bash
 ./install.sh install             # detect → configure → build → run
 ./install.sh upgrade             # rebuild from current code, keep all state
+./install.sh migrate [--dry-run] # 2.x → 3.x schema migration (backup-first)
 ./install.sh status              # scriptable health check (exit 0/1)
 ./install.sh doctor              # deep diagnostics
 ./install.sh backup              # state + config snapshot → ./backups/
@@ -118,7 +119,8 @@ Firewall: `--firewall` opens the right port(s) in `ufw`.
 ```
 
 The full operator runbook is [`ADMIN.md`](ADMIN.md). Upgrades (including the
-2.x → 3.x drill) are in [`UPGRADING.md`](UPGRADING.md). When something breaks,
+2.x → 3.x drill and the automated `./install.sh migrate`) are in
+[`UPGRADING.md`](UPGRADING.md). When something breaks,
 start at [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md).
 
 `release.sh` builds the versioned, **reproducible**, checksummed distribution

@@ -153,10 +153,39 @@ Device identity and state are untouched by either direction. Because backups
 
 ## 6. An automated migrator
 
-A first-class **2.x → 3.x migrator** (credential rotation, config-schema
-migration, role model, with `--dry-run` and backup-first) is part of the v3.0.0
-workstream. Until it ships, use the ordered drill in §4; it performs the same
-transformation manually and is safe to run step by step.
+A first-class **2.x → 3.x migrator** ships as **`migrate.js`** (wrapped by
+`./install.sh migrate`). It performs the transformation in §3–§4 automatically:
+
+```bash
+./install.sh migrate --dry-run      # preview every change; writes nothing
+./install.sh migrate                # backup-first, then apply
+./install.sh upgrade                # rebuild the container on the new schema
+```
+
+What it does, in one pass:
+
+- **Config schema** — moves legacy plaintext gateway tokens + the legacy
+  `portalPassword` out of `portal-config.json` into `portal-secrets.json`
+  (0600), adds the 3.x keys (`publicBind`, `tlsMode`, `trustProxy`,
+  `sessionIdleMinutes`, the login-limit trio) with 2.x-preserving defaults, and
+  stamps `schemaVersion: 3`.
+- **Safe defaults** — a box that bound a public interface in cleartext is moved
+  back to **loopback** (fail closed). Re-expose deliberately with
+  `--domain HOST` (recommended), `--tls-cert/--tls-key`, or
+  `--allow-insecure-plaintext` (trusted LAN only).
+- **Credentials** — any account still on a known-default password (the old
+  shipped `admin`/`admin`, the shared bootstrap password, `*-demo`, …) is
+  rotated to a fresh strong password written to `portal-credentials.txt` (0600).
+- **Role model** — legacy/alias roles (`teacher`, `owner`, `ta`, …) map to
+  `student | instructor | admin`; user records are normalized (lowercase
+  username, `agents` array, `assignments`).
+
+**Backup-first:** before writing anything it copies config + secrets + all state
+into `backups/migrate-<stamp>/` (0700, includes secrets) so a run is fully
+reversible. Delete that directory once you have verified the upgrade.
+
+> `--dry-run` is always safe to run — it reads state and prints the plan, but
+> changes nothing.
 
 ---
 

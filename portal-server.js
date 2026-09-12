@@ -51,6 +51,9 @@ const BRAND = (() => {
 })();
 
 const DEFAULTS = {
+  // Config schema stamp. 2.x configs carry no marker; migrate.js (plan item
+  // 15) stamps 3 to mark a completed 2.x → 3.x migration.
+  schemaVersion: 3,
   port: 18800,
   // Safe default (plan item 7): loopback only. A bare `node portal-server.js`
   // is never reachable off-host; exposing it needs an explicit opt-in (see
@@ -480,6 +483,7 @@ function saveConfig() {
     if (secretsDirty) writeSecrets();
 
     const out = {
+      schemaVersion: CONFIG.schemaVersion || 3,
       port: CONFIG.port,
       bind: CONFIG.bind,
       gateways: CONFIG.gateways.map(g => ({

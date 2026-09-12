@@ -73,6 +73,7 @@ BUILD_DATE="$(date -u -d "@$SOURCE_DATE_EPOCH" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
 # Files that ship in the distribution (code + installer + docs).
 FILES=(
   install.sh
+  migrate.js
   portal-server.js
   portal.html
   setup.html
