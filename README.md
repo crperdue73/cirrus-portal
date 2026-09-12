@@ -121,9 +121,11 @@ The full operator runbook is [`ADMIN.md`](ADMIN.md). Upgrades (including the
 2.x → 3.x drill) are in [`UPGRADING.md`](UPGRADING.md). When something breaks,
 start at [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md).
 
-`release.sh` builds the versioned, checksummed distribution
-(`dist/cirrus-portal-<ver>.tar.gz` + `SHA256SUMS`) containing only code +
-installer + docs — **never per-server state or secrets**.
+`release.sh` builds the versioned, **reproducible**, checksummed distribution
+(`dist/cirrus-portal-<ver>.tar.gz` + `SHA256SUMS` + a CycloneDX **SBOM`) containing
+only code + installer + docs — **never per-server state or secrets**. Pass a GPG
+key (`RELEASE_GPG_KEY`) to also produce a signed `SHA256SUMS.asc`. The build is
+byte-identical for the same tree; the publish checklist is [`RELEASING.md`](RELEASING.md).
 
 ---
 
@@ -202,9 +204,12 @@ plus a static UI. The repo ships its own checks:
 ```bash
 ./run-tests.sh    # node:test suite (auth, RBAC, rooms, config, route smoke) + smoke tests
 ./lint.sh         # JS/shell syntax, JSON validity, line endings
-./release.sh      # build dist/cirrus-portal-<version>.tar.gz + SHA256SUMS
+./release.sh      # reproducible dist/cirrus-portal-<version>.tar.gz + SHA256SUMS + SBOM
 ./secret-scan.sh  # grep the repo (or a built tarball) for leaked secrets
 ```
+
+Cutting a release is a checklist: see [`RELEASING.md`](RELEASING.md). Notable
+changes per version are in [`CHANGELOG.md`](CHANGELOG.md).
 
 CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs **lint → test →
 secret-scan** on every push and pull request, then builds and uploads the
@@ -224,6 +229,8 @@ versioned release artifact.
 | [`THREAT-MODEL.md`](THREAT-MODEL.md) | What it protects, from whom, and residual risk |
 | [`SECURITY.md`](SECURITY.md) | How to report a vulnerability |
 | [`ACCEPTABLE-USE.md`](ACCEPTABLE-USE.md) | Public-host baseline and prohibited uses |
+| [`CHANGELOG.md`](CHANGELOG.md) | What changed in each release (Keep a Changelog) |
+| [`RELEASING.md`](RELEASING.md) | Release checklist — build, sign, verify, tag, publish |
 | [`docs/screenshots/`](docs/screenshots/) | Screenshots + the reproducible capture pass |
 
 ---
