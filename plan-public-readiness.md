@@ -97,7 +97,7 @@
   Encrypted backups, a scheduled-backup helper, and a documented restore drill on
   a clean VM with stated RPO/RTO.
 
-- [ ] **18. Clean-VM end-to-end verification.**
+- [x] **18. Clean-VM end-to-end verification.** ✅ 2026-09-13
   Fresh Debian VM (or throwaway container): full install → wizard → chat → upgrade
   → restore, captured as a repeatable script. Fix everything it surfaces.
 
@@ -550,3 +550,34 @@
   documented + automated locally** — the full fresh-VM install→wizard→chat→upgrade→
   restore is item 18's job. The live box still has no `portal-backup-passphrase`,
   so its next `./install.sh backup` stays plaintext until one is generated.
+- **2026-09-13** — ✅ **Item 18 done.** Clean-box end-to-end verification. Added
+  **`e2e-verify.sh`** — the repeatable clean-box verifier. It performs the whole
+  operator journey in a `mktemp` workspace that **never touches the live tree**
+  (unique-named container, free port, `agent-portal`/its state are never read or
+  written): **install** (a fresh copy's `install.sh install --dry-run` plan +
+  the real `docker build`), **wizard** (`/` 302→`/setup`, all APIs `503` until
+  `POST /api/setup` mints the admin + first gateway), **chat** (create a room,
+  post a message, reload it via the live API **and** from `portal-rooms.json` on
+  disk), **upgrade** (rebuild the image + restart on the *same* state, plus
+  `migrate.js --dry-run` as a 0-change idempotency check), and **restore**
+  (`backup.sh create --with-secrets` → simulated total loss → `backup.sh restore`
+  → **sha256-identical** config/users/rooms/secrets → boots + logs in again).
+  Two backends: **`docker`** (default — a throwaway **hardened** container, and
+  it *asserts* the hardening via `docker inspect`: `User=10001:10001`, read-only
+  rootfs, `CapDrop=ALL`, `/tmp` tmpfs) and **`process`** (Docker-free “fresh VM”).
+  Cleanup always removes the container **and** image; `--keep` preserves the
+  workspace. Wired in: new **`test-e2e.js`** (3/3 — structure + runs the process
+  journey + asserts CI wiring) joins the standalone suite; **CI** now runs the
+  container E2E after the test suite; README **Development**, **ADMIN §3.1**
+  (“Verifying an install end-to-end”) and CHANGELOG document it. Dev-only — not
+  shipped in the release tarball. **Evidence:** `bash -n` + `node --check` clean
+  via `./lint.sh` (28 JS · 8 sh); **`./e2e-verify.sh --backend docker` → PASSED
+  (21 checks)**, **`--backend process` → PASSED (16 checks)**; `node:test` 24/24;
+  full **`./run-tests.sh` all green** (incl. e2e 3/3); `./secret-scan.sh` clean
+  on the repo **and** the freshly built `dist/cirrus-portal-2.2.0.tar.gz` (which
+  correctly carries **no** `e2e-verify.sh`/`test-e2e.js`/`test/` — dev-only).
+  Commit `1eb3f81`.
+  **Note:** it surfaced only script bugs during bring-up (a double-`000` HTTP
+  probe, a missing cookie jar, running the process backend in the wrong cwd) —
+  no product defect was found; the journey is green as shipped. The live box was
+  left completely untouched (still the legacy `agent-portal`, no deploy).
