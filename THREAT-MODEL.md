@@ -184,6 +184,20 @@ it as a security boundary.
 **Residual:** checksum signing and a full SBOM land in the release-engineering
 workstream; until then, verify `SHA256SUMS` against a trusted copy.
 
+### 5.7 Observability endpoints
+
+| Threat | Control | Status |
+| --- | --- | --- |
+| Fleet/traffic metadata disclosure via `/metrics` | Served to loopback only by default; remote access needs an admin session or an explicit `metricsPublic:true` opt-in | ✅ |
+| Log injection / forged entries | Log records are JSON-encoded (`JSON.stringify`), so newlines in input cannot forge a line; app-authored fields only | ✅ |
+| Access-log PII spill | Request logs carry method/path/status/timing + client IP (no credentials, no query string, no bodies); `logRequests:false` disables them | ✅ |
+| `/healthz` used as a cheap liveness oracle | Returns only product/version/uptime — no secrets, no user data; same info a version banner would leak anyway | ✅ |
+| Log volume as a DoS vector | One line per request, streamed to the container log (Docker's log driver caps/rotates); no unbounded in-process buffer | ✅ |
+
+**Residual:** metrics expose approximate fleet size and traffic shape to anyone
+who can reach loopback (or holds an admin session). Keep the bind on loopback,
+and set `metricsPublic` only when the scrape path is already trusted.
+
 ---
 
 ## 6. Out of scope / accepted risks

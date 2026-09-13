@@ -396,6 +396,23 @@ run_status() {
     200|302|401) ok "portal answering HTTP on :$port_cfg (code $code)" ;;
     *) warn "no HTTP response on :$port_cfg (got '$code')"; fails=$((fails+1)) ;;
   esac
+  # observability endpoints (plan item 16)
+  local health _hver _hup
+  health="$(curl -sk --max-time 5 "$_scheme://127.0.0.1:$port_cfg/healthz" || true)"
+  if printf '%s' "$health" | grep -q '"status"[[:space:]]*:[[:space:]]*"ok"'; then
+    _hver="$(printf '%s' "$health" | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+    _hup="$(printf '%s' "$health" | sed -n 's/.*"uptimeSeconds"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p')"
+    ok "health: /healthz ok (v${_hver:-?}, up ${_hup:-?}s)"
+  else
+    warn "/healthz did not report ok (got '${health:0:80}')"; fails=$((fails+1))
+  fi
+  local rcode
+  rcode="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 "$_scheme://127.0.0.1:$port_cfg/readyz" || true)"
+  case "$rcode" in
+    200) ok "readiness: /readyz ready" ;;
+    503) info "readiness: /readyz setup_required — complete the wizard at /setup" ;;
+    *)   warn "/readyz unexpected (got '$rcode')"; fails=$((fails+1)) ;;
+  esac
   # device identity
   if [ -s "$DEVICE_FILE" ]; then
     ok "device identity present ($(json_get "$DEVICE_FILE" deviceId | head -c 12)…)"
@@ -521,6 +538,35 @@ run_doctor() {
   fi
   # audit trail
   [ -s "$AUDIT_FILE" ] && ok "audit log has $(wc -l < "$AUDIT_FILE") entries" || info "audit log empty (no logins yet)"
+  # observability (plan item 16): structured logs + /healthz · /readyz · /metrics
+  {
+    local _lf
+    _lf="$(json_get "$CONFIG_FILE" logFormat 2>/dev/null)"; _lf="${_lf:-json}"
+    case "$_lf" in
+      json) ok "logs: structured JSON (logFormat json)" ;;
+      text) info "logs: plain text (logFormat text) — set logFormat:\"json\" for machine parsing" ;;
+      *)    warn "logs: unknown logFormat '$_lf' (expected json|text)" ;;
+    esac
+    if container_running; then
+      local _oport _oscheme _hc _rcode _mcode _otls
+      _oport="$(json_get "$CONFIG_FILE" port 2>/dev/null || echo "$PORT")"
+      _otls="$(json_get "$CONFIG_FILE" tlsMode 2>/dev/null)"; _oscheme="http"; [ "$_otls" = "manual" ] && _oscheme="https"
+      _hc="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 "$_oscheme://127.0.0.1:$_oport/healthz" || true)"
+      if [ "$_hc" = "200" ]; then ok "observability: /healthz 200"; else warn "observability: /healthz returned '$_hc'"; fails=$((fails+1)); fi
+      _rcode="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 "$_oscheme://127.0.0.1:$_oport/readyz" || true)"
+      case "$_rcode" in
+        200) ok "observability: /readyz ready" ;;
+        503) info "observability: /readyz setup_required" ;;
+        *)   warn "observability: /readyz returned '$_rcode'"; fails=$((fails+1)) ;;
+      esac
+      _mcode="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 "$_oscheme://127.0.0.1:$_oport/metrics" || true)"
+      case "$_mcode" in
+        200) ok "observability: /metrics exposed (loopback)" ;;
+        403) info "observability: /metrics requires admin auth (metricsPublic off)" ;;
+        *)   info "observability: /metrics returned '$_mcode'" ;;
+      esac
+    fi
+  }
   log "─────────────────────────────────────────────────"
   if [ "$fails" -gt 0 ]; then warn "$fails problem(s) found"; return 1; fi
   ok "no problems found."

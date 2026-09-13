@@ -100,9 +100,33 @@ release, so they keep working on un-migrated boxes (see
 What to watch:
 
 - **Container health** — the image has a `HEALTHCHECK` that probes loopback
-  `GET /` (any HTTP response is healthy, including `302`/`503` in setup mode).
+  `GET /healthz` (any 2xx/3xx is healthy; `200` even in setup mode).
 - **Secrets file mode** — must be `0600`; `doctor` checks it.
 - **State ownership** — bind-mounted files must be owned by `10001:10001`.
+
+### Observability endpoints
+
+| Endpoint | Meaning | Access |
+| --- | --- | --- |
+| `GET /healthz` | Liveness: `200 {"status":"ok"}` while the process serves (incl. setup mode). | open |
+| `GET /readyz` | Readiness: `200` when serving; `503` (`setup_required`) until the wizard completes. Reports gateway/user counts. | open |
+| `GET /metrics` | Prometheus text metrics. | loopback, or admin while `metricsPublic:false` |
+
+```bash
+curl -s http://127.0.0.1:18800/healthz
+curl -s http://127.0.0.1:18800/readyz
+curl -s http://127.0.0.1:18800/metrics | grep cirrus_portal_
+```
+
+**Logs.** The server emits one structured **JSON log line per request** (method,
+path, status, `durationMs`, `requestId`, client IP) plus JSON event lines for
+gateway/approval activity. Every response carries `X-Request-Id` (echo an
+inbound `X-Request-Id` to correlate a client trace). Set `"logFormat": "text"`
+for human-readable lines, or `"logRequests": false` to drop access logs; both
+`PORTAL_LOG_FORMAT` and `PORTAL_LOG_QUIET=1` override per-container. `./install.sh
+status`/`doctor` check the format and probe the three endpoints. Only the
+counters in `/metrics` are in-process (reset on restart) — the durable record is
+`portal-audit.log`.
 
 ---
 

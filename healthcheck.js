@@ -4,13 +4,14 @@
  * healthcheck.js — Cirrus Portal container HEALTHCHECK probe (plan item 8).
  *
  * Reads the effective bind/port/TLS from portal-config.json (env overrides
- * honoured, mirroring the server's loadConfig) and probes the portal over
- * loopback. Exit 0 = healthy, 1 = not serving. Zero dependencies.
+ * honoured, mirroring the server's loadConfig) and probes the portal's
+ * /healthz liveness endpoint over loopback. Exit 0 = healthy, 1 = not serving.
+ * Zero dependencies.
  *
- * Any HTTP response counts as healthy: normally `/` is 200/3xx, but in
- * first-run SETUP mode the portal answers 302→/setup and APIs return 503 —
- * the process is up and routing, which is what liveness means. (A dedicated
- * /healthz + /readyz lands in plan item 16; this will switch to /healthz then.)
+ * /healthz (plan item 16) answers 200 whenever the process is up and routing —
+ * including first-run SETUP mode, which is exactly what a liveness probe wants
+ * (the container is healthy even before the wizard is completed). Any 2xx/3xx
+ * now counts; a 5xx or a connection error is unhealthy.
  *
  * Run: node healthcheck.js
  */
@@ -40,10 +41,11 @@ const useTls = Boolean(cfg.tlsCert && cfg.tlsKey)
 const mod = useTls ? https : http;
 
 const req = mod.request(
-  { host, port, path: '/', method: 'GET', timeout: 4000, rejectUnauthorized: useTls ? false : undefined },
+  { host, port, path: '/healthz', method: 'GET', timeout: 4000, rejectUnauthorized: useTls ? false : undefined },
   (res) => {
     res.resume();
-    process.exit(0);
+    // Liveness: 2xx/3xx means the process is up and routing; 4xx/5xx is not healthy.
+    process.exit(res.statusCode >= 200 && res.statusCode < 400 ? 0 : 1);
   },
 );
 req.on('timeout', () => { req.destroy(); process.exit(1); });

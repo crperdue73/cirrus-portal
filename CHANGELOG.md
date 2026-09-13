@@ -34,6 +34,10 @@ box without shooting themselves in the foot.
 - **Container hardening** — digest-pinned base image, non-root user (uid 10001),
   `HEALTHCHECK`, read-only root filesystem, dropped capabilities, resource
   limits.
+- **Observability** — `/healthz` + `/readyz` probes, `/metrics` (Prometheus
+text), per-request `X-Request-Id`, and structured JSON request logs
+(`logFormat`, `logRequests`, `metricsPublic`); wired into `install.sh status` /
+`doctor`.
 - **Public installer v3** — `--domain`, `--tls`, `--public`, `--non-interactive`,
   `--dry-run`, rollback-on-failure, and extended preflight (DNS/TLS/firewall).
 - **Public documentation set** — README quickstart plus `ADMIN.md`,

@@ -17,5 +17,8 @@
   "sessionIdleMinutes": 0,
   "loginMaxAttempts": 5,
   "loginWindowSeconds": 900,
-  "loginLockoutSeconds": 300
+  "loginLockoutSeconds": 300,
+  "logFormat": "json",
+  "logRequests": true,
+  "metricsPublic": false
 }

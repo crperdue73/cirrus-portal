@@ -22,6 +22,7 @@ const KNOWN_CONFIG_KEYS = new Set([
   'sessionTtlHours', 'reconnectBaseMs', 'reconnectMaxMs', 'tlsMode', 'tlsCert',
   'tlsKey', 'trustProxy', 'insecurePlaintext', 'loginMaxAttempts',
   'loginWindowSeconds', 'loginLockoutSeconds', 'sessionIdleMinutes',
+  'logFormat', 'logRequests', 'metricsPublic',
   'gateways', '_comment',
 ]);
 

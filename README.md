@@ -32,6 +32,8 @@ Supported platforms and explicit non-goals are in [`DEPLOYMENT.md`](DEPLOYMENT.m
   per-assignment tool policy (flag + audit).
 - **Audit log & dashboard** — every login/send/account change is recorded; stat
   tiles and activity for admins.
+- **Observability built in** — `/healthz` + `/readyz` probes, structured JSON
+  request logs with `X-Request-Id`, and a Prometheus `/metrics` endpoint.
 - **Secure by default** — no default credentials, loopback bind, TLS-gated
   public exposure, hardened non-root container.
 
@@ -129,6 +131,24 @@ only code + installer + docs — **never per-server state or secrets**. Pass a G
 key (`RELEASE_GPG_KEY`) to also produce a signed `SHA256SUMS.asc`. The build is
 byte-identical for the same tree; the publish checklist is [`RELEASING.md`](RELEASING.md).
 
+### Observability
+
+The server ships liveness/readiness probes, structured logs, and Prometheus
+metrics — no external agent required:
+
+| Endpoint | Purpose | Access |
+| --- | --- | --- |
+| `GET /healthz` | Liveness — `200` while the process is up (incl. setup mode) | open |
+| `GET /readyz` | Readiness — `200` when serving; `503` while the setup wizard is pending | open |
+| `GET /metrics` | Prometheus text metrics (requests, sessions, gateways, users, logins) | loopback, or admin when `metricsPublic:false` |
+
+Every request gets an `X-Request-Id` (echoed from the caller, else minted) and
+one structured **JSON log line** on completion (method, path, status, duration,
+request id, client IP). Set `"logFormat": "text"` for human-readable lines, or
+`"logRequests": false` to silence access logs. `./install.sh status` and
+`doctor` now probe `/healthz` + `/readyz` and report the log format. Point your
+scraper at `http://127.0.0.1:18800/metrics`.
+
 ---
 
 ## Configuration
@@ -149,7 +169,10 @@ byte-identical for the same tree; the publish checklist is [`RELEASING.md`](RELE
   "sessionIdleMinutes": 0,
   "loginMaxAttempts": 5,
   "loginWindowSeconds": 900,
-  "loginLockoutSeconds": 300
+  "loginLockoutSeconds": 300,
+  "logFormat": "json",
+  "logRequests": true,
+  "metricsPublic": false
 }
 ```
 

@@ -81,6 +81,10 @@ const DEFAULTS = {
   loginWindowSeconds: 900,  // rolling window those failures are counted in
   loginLockoutSeconds: 300, // base lockout; doubles on repeat lockouts (≤1h)
   sessionIdleMinutes: 0,    // 0 = no idle timeout (absolute TTL only)
+  // Observability (plan item 16)
+  logFormat: 'json',        // 'json' = structured JSON lines, 'text' = human-readable
+  logRequests: true,        // emit one structured access-log line per request
+  metricsPublic: false,     // /metrics stays loopback(+admin) unless explicitly public
 };
 
 // ── Credential safety ────────────────────────────────────────────────────────
@@ -2171,12 +2175,183 @@ function normalizeMessage(m) {
   };
 }
 
+// ── Observability (plan item 16) ────────────────────────────────────────────
+// Liveness (/healthz), readiness (/readyz), structured JSON logs carrying a
+// per-request id, and a dependency-free Prometheus text /metrics endpoint.
+const STARTED_AT = Date.now();
+const VERSION = (() => {
+  try { return fs.readFileSync(path.join(DIR, 'VERSION'), 'utf8').trim() || '0.0.0'; }
+  catch { return '0.0.0'; }
+})();
+const LOG_FORMAT = String(process.env.PORTAL_LOG_FORMAT || CONFIG.logFormat || 'json').toLowerCase() === 'text' ? 'text' : 'json';
+const LOG_REQUESTS = CONFIG.logRequests !== false && !truthyEnv(process.env.PORTAL_LOG_QUIET);
+
+// In-process counters for /metrics. Label sets are bounded (method + status
+// class + role), so cardinality cannot grow with traffic. Reset on restart —
+// these are operational gauges, not a durable record (the audit log is that).
+const METRICS = {
+  httpRequests: new Map(),   // `${method} ${statusClass}` -> count
+  httpDurationMsSum: 0,
+  httpDurationCount: 0,
+  inFlight: 0,
+  logins: 0,
+  loginFailures: 0,
+  csrfRejects: 0,
+};
+
+// One structured log line. `logFormat:"json"` (the default) emits a JSON object
+// per event; `"text"` keeps the classic `[portal] …` line for humans.
+function logEvent(level, msg, fields) {
+  const rec = {
+    ts: new Date().toISOString(),
+    level,
+    msg,
+    product: BRAND.slug,
+    version: VERSION,
+    ...(fields || {}),
+  };
+  const line = LOG_FORMAT === 'json' ? JSON.stringify(rec) : `[portal] ${String(level).toUpperCase()} ${msg}`;
+  if (level === 'warn' || level === 'error') console.error(line);
+  else console.log(line);
+}
+
+function uptimeSeconds() { return Math.round((Date.now() - STARTED_AT) / 1000); }
+
+function healthz(res) {
+  json(res, 200, {
+    status: 'ok',
+    product: BRAND.product,
+    version: VERSION,
+    uptimeSeconds: uptimeSeconds(),
+    time: new Date().toISOString(),
+  });
+}
+
+// Readiness: the portal is ready to serve once it is out of first-run SETUP.
+// Gateway connectivity is reported but never gates readiness — the console is
+// fully usable (login, users, rooms, audit) with a gateway down.
+function readyz(res) {
+  const connected = gatewaysConnected().length;
+  const configured = CONFIG.gateways.length;
+  const ready = !SETUP_REQUIRED;
+  json(res, ready ? 200 : 503, {
+    status: ready ? 'ready' : 'setup_required',
+    product: BRAND.product,
+    version: VERSION,
+    uptimeSeconds: uptimeSeconds(),
+    setupRequired: SETUP_REQUIRED,
+    gateways: { connected, configured },
+    users: USERS.length,
+    time: new Date().toISOString(),
+  });
+}
+
+// /metrics is scrapeable without auth from loopback (the common same-host
+// Prometheus setup) or anywhere when metricsPublic is set. Otherwise it needs
+// an admin session — metrics reveal fleet size and traffic shape.
+function metricsAllowed(req) {
+  if (CONFIG.metricsPublic === true || truthyEnv(process.env.PORTAL_METRICS_PUBLIC)) return true;
+  const ip = clientIp(req);
+  if (/^(127\.|::1$|::ffff:127\.)/.test(ip)) return true;
+  const s = currentSession(req);
+  const u = s ? findUser(s.username) : null;
+  return !!(u && u.role === 'admin');
+}
+
+function auditLineCount() {
+  try {
+    const txt = fs.readFileSync(AUDIT_PATH, 'utf8');
+    let n = 0;
+    for (let i = 0; i < txt.length; i++) if (txt.charCodeAt(i) === 10) n++;
+    return n;
+  } catch { return 0; }
+}
+
+function metrics(res, req) {
+  if (!metricsAllowed(req)) {
+    return json(res, 403, { error: 'metrics not public — scrape from loopback or set metricsPublic:true' });
+  }
+  const esc = (v) => String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  const L = [];
+  const metric = (name, type, help, lines) => {
+    L.push(`# HELP ${name} ${help}`);
+    L.push(`# TYPE ${name} ${type}`);
+    for (const l of lines) L.push(l);
+  };
+  metric('cirrus_portal_up', 'gauge', '1 while the portal process is serving.', ['cirrus_portal_up 1']);
+  metric('cirrus_portal_build_info', 'gauge', 'Build identity (always 1).',
+    [`cirrus_portal_build_info{version="${esc(VERSION)}",product="${esc(BRAND.slug)}"} 1`]);
+  metric('cirrus_portal_uptime_seconds', 'gauge', 'Seconds since process start.', [`cirrus_portal_uptime_seconds ${uptimeSeconds()}`]);
+  metric('cirrus_portal_setup_required', 'gauge', '1 while the first-run setup wizard is pending.',
+    [`cirrus_portal_setup_required ${SETUP_REQUIRED ? 1 : 0}`]);
+  const reqLines = [...METRICS.httpRequests.entries()]
+    .sort()
+    .map(([k, v]) => {
+      const [method, status] = k.split(' ');
+      return `cirrus_portal_http_requests_total{method="${esc(method)}",status="${esc(status)}"} ${v}`;
+    });
+  metric('cirrus_portal_http_requests_total', 'counter', 'HTTP requests by method and status class.', reqLines.length ? reqLines : ['cirrus_portal_http_requests_total{method="none",status="none"} 0']);
+  metric('cirrus_portal_http_in_flight', 'gauge', 'Requests currently being handled.', [`cirrus_portal_http_in_flight ${METRICS.inFlight}`]);
+  metric('cirrus_portal_http_request_duration_seconds_sum', 'counter', 'Sum of request handling time.', [`cirrus_portal_http_request_duration_seconds_sum ${(METRICS.httpDurationMsSum / 1000).toFixed(6)}`]);
+  metric('cirrus_portal_http_request_duration_seconds_count', 'counter', 'Count of timed requests.', [`cirrus_portal_http_request_duration_seconds_count ${METRICS.httpDurationCount}`]);
+  metric('cirrus_portal_sessions_active', 'gauge', 'Active login sessions.', [`cirrus_portal_sessions_active ${sessions.size}`]);
+  metric('cirrus_portal_gateways_connected', 'gauge', 'Gateways currently connected.', [`cirrus_portal_gateways_connected ${gatewaysConnected().length}`]);
+  metric('cirrus_portal_gateways_configured', 'gauge', 'Gateways configured.', [`cirrus_portal_gateways_configured ${CONFIG.gateways.length}`]);
+  const roleCounts = { admin: 0, instructor: 0, student: 0 };
+  for (const u of USERS) if (roleCounts[u.role] !== undefined) roleCounts[u.role]++;
+  metric('cirrus_portal_users', 'gauge', 'Accounts by role.',
+    Object.entries(roleCounts).map(([role, n]) => `cirrus_portal_users{role="${esc(role)}"} ${n}`));
+  metric('cirrus_portal_logins_total', 'counter', 'Successful logins since start.', [`cirrus_portal_logins_total ${METRICS.logins}`]);
+  metric('cirrus_portal_login_failures_total', 'counter', 'Failed or throttled logins since start.', [`cirrus_portal_login_failures_total ${METRICS.loginFailures}`]);
+  metric('cirrus_portal_csrf_rejects_total', 'counter', 'State-changing requests rejected on CSRF.', [`cirrus_portal_csrf_rejects_total ${METRICS.csrfRejects}`]);
+  metric('cirrus_portal_audit_entries', 'gauge', 'Lines currently in the audit log.', [`cirrus_portal_audit_entries ${auditLineCount()}`]);
+  res.writeHead(200, { 'Content-Type': 'text/plain; version=0.0.4; charset=utf-8' });
+  res.end(L.join('\n') + '\n');
+}
+
 // ── HTTP server ─────────────────────────────────────────────────────────────
 const requestListener = (req, res) => {
   // HSTS whenever we are in a secure context — direct TLS, or a trusted proxy
   // terminates it. Browsers ignore it over plaintext (plan item 5).
   if (SECURE_CONTEXT) res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+
+  // Request id (plan item 16): echo a caller-supplied X-Request-Id or mint one,
+  // expose it on the response, and log one structured line when the response
+  // finishes — for every route, write or read, success or error.
+  const startedAt = process.hrtime.bigint();
+  const reqId = String(req.headers['x-request-id'] || '').trim().slice(0, 128) || crypto.randomBytes(8).toString('hex');
+  req.reqId = reqId;
+  res.setHeader('X-Request-Id', reqId);
+  METRICS.inFlight++;
+  let _logged = false;
+  res.on('finish', () => {
+    if (_logged) return;
+    _logged = true;
+    METRICS.inFlight--;
+    const durationMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+    const statusClass = `${Math.floor(res.statusCode / 100)}xx`;
+    const key = `${req.method} ${statusClass}`;
+    METRICS.httpRequests.set(key, (METRICS.httpRequests.get(key) || 0) + 1);
+    METRICS.httpDurationMsSum += durationMs;
+    METRICS.httpDurationCount++;
+    if (LOG_REQUESTS) {
+      logEvent('info', 'request', {
+        requestId: reqId,
+        method: req.method,
+        path: url.pathname,
+        status: res.statusCode,
+        durationMs: Math.round(durationMs * 1000) / 1000,
+        ip: clientIp(req),
+      });
+    }
+  });
+
+  // Observability endpoints (plan item 16). Probes must answer even in first-run
+  // SETUP mode, so these sit ahead of the setup funnel below.
+  if (url.pathname === '/healthz') return healthz(res);
+  if (url.pathname === '/readyz') return readyz(res);
+  if (url.pathname === '/metrics') return metrics(res, req);
 
   // Static UI
   // First-run: until an admin exists, every page funnels to the setup wizard
@@ -2307,12 +2482,14 @@ async function handleApi(req, res, url) {
     const gate = loginGuard(req, body.username);
     if (gate) {
       audit('login_throttled', String(body.username || '?').toLowerCase(), 'anon', { retryAfter: gate.retryAfter });
+      METRICS.loginFailures++;
       res.setHeader('Retry-After', String(gate.retryAfter));
       return json(res, 429, { error: `too many failed attempts — try again in ${gate.retryAfter}s`, retryAfter: gate.retryAfter });
     }
     const u = verifyUser(body.username, body.password);
     if (!u) {
       const r = recordLoginFailure(req, body.username);
+      METRICS.loginFailures++;
       audit('login_failed', String(body.username || '?').toLowerCase(), 'anon',
         r.locked ? { locked: true, retryAfter: r.retryAfter } : { remaining: r.remaining });
       if (r.locked) {
@@ -2327,6 +2504,7 @@ async function handleApi(req, res, url) {
     destroySession(sessionTokenFromReq(req));
     const tok = createSession(u);
     const sess = sessions.get(tok);
+    METRICS.logins++;
     audit('login', u.username, u.role);
     res.writeHead(200, {
       'Content-Type': 'application/json',
@@ -2338,7 +2516,7 @@ async function handleApi(req, res, url) {
   if (p === '/api/logout' && req.method === 'POST') {
     if (!originOk(req)) return json(res, 403, { error: 'cross-origin request refused' });
     const sess = currentSession(req);
-    if (sess && !csrfOk(req, sess)) return json(res, 403, { error: 'csrf token missing or invalid' });
+    if (sess && !csrfOk(req, sess)) { METRICS.csrfRejects++; return json(res, 403, { error: 'csrf token missing or invalid' }); }
     const u = sess ? findUser(sess.username) : null;
     if (u) audit('logout', u.username, u.role);
     destroySession(sessionTokenFromReq(req));
@@ -2351,7 +2529,7 @@ async function handleApi(req, res, url) {
     if (!originOk(req)) return json(res, 403, { error: 'cross-origin request refused' });
     const sess = currentSession(req);
     if (!sess) return json(res, 401, { error: 'unauthorized' });
-    if (!csrfOk(req, sess)) return json(res, 403, { error: 'csrf token missing or invalid' });
+    if (!csrfOk(req, sess)) { METRICS.csrfRejects++; return json(res, 403, { error: 'csrf token missing or invalid' }); }
     const u = findUser(sess.username);
     const n = destroyUserSessions(sess.username);
     if (u) audit('logout_all', u.username, u.role, { sessions: n });
@@ -2369,6 +2547,7 @@ async function handleApi(req, res, url) {
   if (STATE_CHANGING.has(req.method)) {
     if (!originOk(req)) return json(res, 403, { error: 'cross-origin request refused' });
     if (!csrfOk(req, currentSession(req))) {
+      METRICS.csrfRejects++;
       audit('csrf_reject', user.username, user.role, { path: p, method: req.method });
       return json(res, 403, { error: 'csrf token missing or invalid' });
     }
@@ -3048,6 +3227,7 @@ server.listen(CONFIG.port, CONFIG.bind, () => {
     console.log(`            ${SCHEME}://${isLoopbackBind(CONFIG.bind) || isWildcardBind(CONFIG.bind) ? '<this-host>' : CONFIG.bind}:${CONFIG.port}/setup`);
     console.log('            (all other routes are refused until setup completes — there is no default login)');
   }
+  console.log(`   obs:     /healthz · /readyz · /metrics  (logs: ${LOG_FORMAT}${LOG_REQUESTS ? '' : ', requests off'})`);
   console.log('   ready.');
 });
 server.on('error', (e) => {
