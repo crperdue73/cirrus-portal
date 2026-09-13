@@ -9,7 +9,7 @@ Version lines: `2.x` (internal/pre-release) and `3.x` (first public release line
 
 ## [Unreleased]
 
-## [3.0.0] — unreleased
+## [3.0.0] — 2026-09-13
 
 The first public release. Everything below is the hardening pass that turns the
 internal 2.x console into a self-hosted product people can install on their own
@@ -120,3 +120,6 @@ Internal pre-release.
   agent-access enforcement.
 - Tool receipts and staff approval of tool runs from chat.
 - Device-signed operator connection (Ed25519 `portal-device.json`).
+
+[Unreleased]: https://github.com/crperdue73/cirrus-portal/compare/v3.0.0...HEAD
+[3.0.0]: https://github.com/crperdue73/cirrus-portal/releases/tag/v3.0.0
