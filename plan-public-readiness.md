@@ -93,7 +93,7 @@
   `/healthz` + `/readyz`, structured JSON logs, request IDs, and basic metrics;
   wire them into `install.sh status` / `doctor`.
 
-- [ ] **17. Backup / restore / DR verified.**
+- [x] **17. Backup / restore / DR verified.** ✅ 2026-09-12
   Encrypted backups, a scheduled-backup helper, and a documented restore drill on
   a clean VM with stated RPO/RTO.
 
@@ -509,3 +509,44 @@
   `/healthz did not report ok` + `/readyz 404` there (2 checks fail) until the next
   `./install.sh upgrade`/rebuild picks up this code. Read-only inspection only — nothing was changed
   on the live box this run.
+- **2026-09-12** — ✅ **Item 17 done.** Backup / restore / DR verified. Added **`backup.sh`** — the
+  encrypted backup + disaster-recovery helper (tar/gzip + `gpg` AES-256, `openssl`
+  fallback; zero Node/Docker/network): **`create [--with-secrets]`** snapshots
+  config + state and, when asked, the gateway-token store + one-time admin
+  credential (safe *because* encrypted) into `backups/cirrus-backup-<stamp>.tar.gz.{gpg,enc}`
+  with a `.sha256` sidecar + `SHA256SUMS`/`MANIFEST.json` integrity layer and
+  `--keep N` retention; **`verify`** decrypts + checks ciphertext hash → `SHA256SUMS`
+  → manifest without touching live state; **`restore`** verifies, snapshots the
+  *current* state to `backups/pre-restore-<stamp>/`, then writes atomically and
+  mode-preserving; **`drill`** does a full clean-VM simulation in a throwaway dir
+  (fixture → create → wipe → restore → sha256-compare) and prints the measured
+  restore wall-clock (RTO evidence); **`schedule`** prints (or, as root, installs)
+  a systemd **timer** + `/etc/cron.d` fallback that runs `create --with-secrets
+  --keep 14` on an interval. Passphrase resolves from `--passphrase-file` →
+  `$PORTAL_BACKUP_PASSPHRASE_FILE` → `$PORTAL_BACKUP_PASSPHRASE` →
+  `./portal-backup-passphrase` (0600) → TTY prompt — never argv. Wired
+  `install.sh backup/restore` to **delegate to `backup.sh`** when a passphrase is
+  set (encrypted path; plaintext fallback warns) and to accept `.gpg`/`.enc` on
+  restore; installer `--help` gained a **Backups & disaster recovery** section;
+  `.gitignore` now ignores `portal-backup-passphrase`. Authored **`docs/DR-DRILL.md`**
+  with stated **RPO (≤1 interval, 15 min default)** and **RTO (≤15 min; measured
+  state restore sub-second + 1–3 min rebuild)**, the everyday commands, retention/
+  off-box policy, and a documented **clean-VM restore drill** (§4b) with a
+  failure-mode table; updated ADMIN §4, TROUBLESHOOTING §7, UPGRADING §5, README
+  (ops + docs index), CHANGELOG; `release.sh` now ships `backup.sh` + `docs/DR-DRILL.md`.
+  Evidence: `./lint.sh` clean (27 JS · 7 sh); new **`test-backup.js` 8/8** (AES
+  surface + passphrase handling · `create --with-secrets` ciphertext contains **no**
+  plaintext token/room data + `verify` OK · wrong passphrase **and** a flipped
+  ciphertext byte both refused · `restore` reproduces config+state+secrets exactly
+  and a plain snapshot omits secrets · `drill` PASS + measured time · schedule
+  timer/cron/RPO · DR-DRILL/ADMIN/release/.gitignore wiring); `./run-tests.sh`
+  **all green** (24 node:test + every standalone suite incl. backup 8/8);
+  `./secret-scan.sh` clean on the repo **and** the freshly built
+  `dist/cirrus-portal-2.2.0.tar.gz` (now carrying `backup.sh` + `docs/DR-DRILL.md`,
+  and still **no** state/secrets/passphrase). Commit `91083b6`.
+  **Note:** docs/code/test only — **no live deploy**. The **scheduled timer is
+  printed, not installed** (installing/removing needs root + is deliberately
+  explicit; never done on the live box mid-day), and the **clean-VM drill is
+  documented + automated locally** — the full fresh-VM install→wizard→chat→upgrade→
+  restore is item 18's job. The live box still has no `portal-backup-passphrase`,
+  so its next `./install.sh backup` stays plaintext until one is generated.
