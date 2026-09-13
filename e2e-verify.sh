@@ -201,8 +201,13 @@ wait_http() {
 }
 
 diag_docker() { # why can't the host reach the container's loopback port?
+  set +e # never let a diagnostic abort the dump (script runs under -Eeuo pipefail)
   {
     echo "── wait_http diagnostics (host cannot reach 127.0.0.1:$PORT) ──"
+    echo "docker version: $(docker --version 2>&1)"
+    echo "rootless/userns: $(docker info 2>/dev/null | grep -iE 'rootless|userns' | tr '\n' ' ' || true)"
+    echo "host network exists: $(docker network ls --format '{{.Name}}' 2>/dev/null | grep -x host || echo NO)"
+    echo "host firewall: $(iptables -S 2>/dev/null | head -3 | tr '\n' ' ' || echo '(none/n/a)')"
     echo "curl -v from host:"
     curl -v --noproxy '*' --max-time 5 "http://127.0.0.1:$PORT/" 2>&1 | sed 's/^/  | /' | tail -15
     echo "proxy env: $(env | grep -i proxy | tr '\n' ' ' || true)"
