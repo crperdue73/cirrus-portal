@@ -23,6 +23,7 @@ const KNOWN_CONFIG_KEYS = new Set([
   'tlsKey', 'trustProxy', 'insecurePlaintext', 'loginMaxAttempts',
   'loginWindowSeconds', 'loginLockoutSeconds', 'sessionIdleMinutes',
   'logFormat', 'logRequests', 'metricsPublic',
+  'auditRetentionDays', 'auditMaxBytes', 'rateLimitPerMinute', 'rateLimitBurst', 'maxBodyBytes',
   'gateways', '_comment',
 ]);
 

@@ -66,6 +66,13 @@ text), per-request `X-Request-Id`, and structured JSON request logs
   into `portal-secrets.json`, 3.x keys, `schemaVersion` stamp), known-default
   credential rotation, legacy-role mapping, and fail-closed re-exposure of a
   previously-cleartext public bind.
+- **Compliance & abuse controls** — configurable **audit retention**
+  (`auditRetentionDays`, default 90; `auditMaxBytes` cap; pruned at boot, every
+  6h, and via `POST /api/audit/prune`), a **per-IP rate limit** (`429` +
+  `Retry-After`) on every non-probe route, a **request-body cap** (`413`), and
+  **data export/erasure** (`GET /api/users/<user>/export`;
+  `DELETE /api/users/<user>` now purges account + context + sessions). A
+  plain-language [`PRIVACY.md`](PRIVACY.md) documents it all.
 
 ### Changed
 - **Official name: `Cirrus Portal`** (was "Agent Portal"). Slug/container
@@ -83,7 +90,7 @@ text), per-request `X-Request-Id`, and structured JSON request logs
 - Cookies are `HttpOnly` + `SameSite=Strict` (and `Secure` under TLS); HSTS is
   emitted in secure contexts.
 - Added `LICENSE` (Apache-2.0), `NOTICE`, `THIRD-PARTY-NOTICES.md`,
-  `SECURITY.md`, and `ACCEPTABLE-USE.md`.
+  `SECURITY.md`, `ACCEPTABLE-USE.md`, and `PRIVACY.md`.
 
 ### Notes
 - Cirrus Portal is **single-tenant, self-hosted** — one organization per

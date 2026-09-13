@@ -20,5 +20,10 @@
   "loginLockoutSeconds": 300,
   "logFormat": "json",
   "logRequests": true,
-  "metricsPublic": false
+  "metricsPublic": false,
+  "auditRetentionDays": 90,
+  "auditMaxBytes": 1048576,
+  "rateLimitPerMinute": 300,
+  "rateLimitBurst": 60,
+  "maxBodyBytes": 1048576
 }

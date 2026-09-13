@@ -85,6 +85,12 @@ const DEFAULTS = {
   logFormat: 'json',        // 'json' = structured JSON lines, 'text' = human-readable
   logRequests: true,        // emit one structured access-log line per request
   metricsPublic: false,     // /metrics stays loopback(+admin) unless explicitly public
+  // Compliance + abuse controls (plan item 19)
+  auditRetentionDays: 90,      // audit entries older than this are pruned (0 = keep forever)
+  auditMaxBytes: 1024 * 1024,  // hard size cap; trimmed to the newest entries past it
+  rateLimitPerMinute: 300,     // per-IP request budget for every non-probe route
+  rateLimitBurst: 60,          // extra allowance above the steady rate, per window
+  maxBodyBytes: 1024 * 1024,   // reject JSON request bodies larger than this (413)
 };
 
 // ── Credential safety ────────────────────────────────────────────────────────
@@ -231,6 +237,11 @@ function loadConfig() {
     PORTAL_LOGIN_WINDOW_SECONDS: 'loginWindowSeconds',
     PORTAL_LOGIN_LOCKOUT_SECONDS: 'loginLockoutSeconds',
     PORTAL_SESSION_IDLE_MINUTES: 'sessionIdleMinutes',
+    PORTAL_AUDIT_RETENTION_DAYS: 'auditRetentionDays',
+    PORTAL_AUDIT_MAX_BYTES: 'auditMaxBytes',
+    PORTAL_RATE_LIMIT_PER_MINUTE: 'rateLimitPerMinute',
+    PORTAL_RATE_LIMIT_BURST: 'rateLimitBurst',
+    PORTAL_MAX_BODY_BYTES: 'maxBodyBytes',
   };
   for (const [envKey, cfgKey] of Object.entries(envMap)) {
     if (process.env[envKey] !== undefined) {
@@ -1562,6 +1573,38 @@ function recordLoginFailure(req, username) {
 
 function clearLoginFailures(req, username) { loginFailures.delete(loginKey(req, username)); }
 
+// ── Abuse controls: per-IP request rate limit (plan item 19) ────────────────
+// A fixed-window budget per client IP for every non-probe route. This is the
+// blunt "one noisy or abusive source cannot hammer a public instance" guard;
+// it sits ABOVE the per-account login lockout above, which still applies to
+// /api/login. Health/readiness/metrics probes are exempt so monitoring is
+// never throttled. In-memory: a restart clears the counters.
+const PROBE_PATHS = new Set(['/healthz', '/readyz', '/metrics']);
+const rateBuckets = new Map(); // ip -> { count, resetAt, alerted }
+
+function rateLimitEnabled() { return (Number(CONFIG.rateLimitPerMinute) || 0) > 0; }
+function rateLimitMax() {
+  return Math.max(1, Number(CONFIG.rateLimitPerMinute) || 300)
+    + Math.max(0, Number(CONFIG.rateLimitBurst) || 0);
+}
+function maxBodyBytes() { return Math.max(1024, Number(CONFIG.maxBodyBytes) || 1024 * 1024); }
+
+// → null when allowed, else { retryAfter, limit } (seconds until the window resets).
+function rateCheck(req) {
+  if (!rateLimitEnabled()) return null;
+  const now = Date.now();
+  const ip = clientIp(req);
+  let b = rateBuckets.get(ip);
+  if (!b || b.resetAt <= now) { b = { count: 0, resetAt: now + 60_000, alerted: false }; rateBuckets.set(ip, b); }
+  b.count++;
+  // bound memory: drop expired buckets when the map grows large
+  if (rateBuckets.size > 20000) for (const [k, v] of rateBuckets) if (v.resetAt <= now) rateBuckets.delete(k);
+  if (b.count > rateLimitMax()) {
+    return { retryAfter: Math.max(1, Math.ceil((b.resetAt - now) / 1000)), limit: rateLimitMax() };
+  }
+  return null;
+}
+
 // Access: which agents can this user reach? '*' = all, 'gwId:*' = all agents
 // on one server, bare id matches any server with that agent.
 function agentAllowed(user, refOrId) {
@@ -1588,8 +1631,46 @@ function canAccessSession(user, sessionKey) {
   return agentAllowed(user, p.gwId ? `${p.gwId}:${p.agentId}` : p.agentId);
 }
 
-// ── Audit log (Phase I groundwork) ─────────────────────────────────────────
-const AUDIT_MAX_BYTES = 1024 * 1024;
+// ── Audit log (Phase I groundwork; retention policy = plan item 19) ─────────
+// The audit log is an operator-controlled, append-only trail of security-
+// relevant actions (logins, user/gateway changes, sends, policy blocks). It is
+// held locally and never leaves the host. Two bounds keep it finite:
+//   • auditRetentionDays — entries older than the window are pruned (0 = keep)
+//   • auditMaxBytes      — hard size cap; trimmed to the newest entries past it
+// Pruning runs at boot, on a timer, and after an append once the file crosses
+// the size cap. Always keeps at least the newest AUDIT_KEEP_MIN entries so a
+// burst of malformed lines can never empty the trail.
+const AUDIT_KEEP_MIN = 500;
+
+function auditRetentionDays() { return Math.max(0, Number(CONFIG.auditRetentionDays) || 0); }
+function auditMaxBytes() { return Math.max(64 * 1024, Number(CONFIG.auditMaxBytes) || 1024 * 1024); }
+
+function auditAppend(entry) { fs.appendFileSync(AUDIT_PATH, JSON.stringify(entry) + '\n'); }
+
+// Rewrite the audit file applying both bounds. Returns the number of entries
+// removed. Safe to call with no file (no-op). Never throws.
+function pruneAudit(now = Date.now()) {
+  let removed = 0;
+  try {
+    if (!fs.existsSync(AUDIT_PATH)) return 0;
+    const lines = fs.readFileSync(AUDIT_PATH, 'utf8').split('\n').filter(Boolean);
+    if (!lines.length) return 0;
+    const days = auditRetentionDays();
+    const cutoff = days > 0 ? now - days * 86400_000 : 0;
+    let kept = cutoff > 0 ? lines.filter((l) => {
+      try { const e = JSON.parse(l); return !e.ts || e.ts >= cutoff; } catch { return false; }
+    }) : lines.slice();
+    const cap = auditMaxBytes();
+    while (kept.length > AUDIT_KEEP_MIN && Buffer.byteLength(kept.join('\n') + '\n', 'utf8') > cap) kept.shift();
+    removed = lines.length - kept.length;
+    if (removed > 0) {
+      const tmp = AUDIT_PATH + '.tmp';
+      fs.writeFileSync(tmp, kept.length ? kept.join('\n') + '\n' : '', { mode: 0o600 });
+      fs.renameSync(tmp, AUDIT_PATH);
+    }
+  } catch (e) { /* audit maintenance must never break the portal */ }
+  return removed;
+}
 
 function audit(action, username, role, detail) {
   const entry = {
@@ -1600,14 +1681,15 @@ function audit(action, username, role, detail) {
   };
   if (detail) entry.detail = detail;
   try {
-    fs.appendFileSync(AUDIT_PATH, JSON.stringify(entry) + '\n');
-    // keep the file bounded
-    if (fs.statSync(AUDIT_PATH).size > AUDIT_MAX_BYTES) {
-      const lines = fs.readFileSync(AUDIT_PATH, 'utf8').split('\n').filter(Boolean);
-      fs.writeFileSync(AUDIT_PATH, lines.slice(-5000).join('\n') + '\n');
-    }
+    auditAppend(entry);
+    // keep the file bounded (size cap; also enforces the age window)
+    if (fs.statSync(AUDIT_PATH).size > auditMaxBytes()) pruneAudit();
   } catch (e) { /* audit must never break the portal */ }
 }
+
+// Apply the retention policy at boot and periodically while running.
+try { pruneAudit(); } catch { /* never fatal */ }
+setInterval(() => pruneAudit(), 6 * 3600_000).unref();
 
 function readAudit(limit) {
   try {
@@ -2197,6 +2279,7 @@ const METRICS = {
   logins: 0,
   loginFailures: 0,
   csrfRejects: 0,
+  rateLimited: 0,
 };
 
 // One structured log line. `logFormat:"json"` (the default) emits a JSON object
@@ -2304,6 +2387,7 @@ function metrics(res, req) {
   metric('cirrus_portal_logins_total', 'counter', 'Successful logins since start.', [`cirrus_portal_logins_total ${METRICS.logins}`]);
   metric('cirrus_portal_login_failures_total', 'counter', 'Failed or throttled logins since start.', [`cirrus_portal_login_failures_total ${METRICS.loginFailures}`]);
   metric('cirrus_portal_csrf_rejects_total', 'counter', 'State-changing requests rejected on CSRF.', [`cirrus_portal_csrf_rejects_total ${METRICS.csrfRejects}`]);
+  metric('cirrus_portal_rate_limited_total', 'counter', 'Requests rejected by the per-IP rate limit.', [`cirrus_portal_rate_limited_total ${METRICS.rateLimited}`]);
   metric('cirrus_portal_audit_entries', 'gauge', 'Lines currently in the audit log.', [`cirrus_portal_audit_entries ${auditLineCount()}`]);
   res.writeHead(200, { 'Content-Type': 'text/plain; version=0.0.4; charset=utf-8' });
   res.end(L.join('\n') + '\n');
@@ -2346,6 +2430,33 @@ const requestListener = (req, res) => {
       });
     }
   });
+
+  // Reject oversized request bodies early (plan item 19) — a cheap cap before
+  // any handler buffers attacker-controlled JSON.
+  if (STATE_CHANGING.has(req.method)) {
+    const clen = Number(req.headers['content-length'] || 0);
+    if (clen > maxBodyBytes()) {
+      res.writeHead(413, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: `request body too large (max ${maxBodyBytes()} bytes)` }));
+    }
+  }
+
+  // Abuse control (plan item 19): per-IP rate limit for every non-probe route.
+  if (!PROBE_PATHS.has(url.pathname)) {
+    const rl = rateCheck(req);
+    if (rl) {
+      METRICS.rateLimited++;
+      const bucket = rateBuckets.get(clientIp(req));
+      if (bucket && !bucket.alerted) {
+        bucket.alerted = true;
+        audit('rate_limited', null, 'anon', { ip: clientIp(req), path: url.pathname, limit: rl.limit });
+      }
+      res.setHeader('Retry-After', String(rl.retryAfter));
+      logEvent('warn', 'rate_limited', { requestId: reqId, ip: clientIp(req), path: url.pathname, limit: rl.limit });
+      res.writeHead(429, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'too many requests — slow down', retryAfter: rl.retryAfter }));
+    }
+  }
 
   // Observability endpoints (plan item 16). Probes must answer even in first-run
   // SETUP mode, so these sit ahead of the setup funnel below.
@@ -2409,7 +2520,7 @@ function readBody(req) {
     let data = '';
     req.on('data', (chunk) => {
       data += chunk;
-      if (data.length > 1_000_000) { req.destroy(); resolve(null); }
+      if (data.length > maxBodyBytes()) { req.destroy(); resolve(null); }
     });
     req.on('end', () => {
       try { resolve(data ? JSON.parse(data) : {}); } catch { resolve(null); }
@@ -2824,7 +2935,43 @@ async function handleApi(req, res, url) {
     return json(res, 200, { ok: true, user: publicUser(u) });
   }
 
-  // Delete user
+  // Data export (plan item 19): the subject can export their own data; an
+  // admin can export anyone's. Returns a portable JSON document (download) —
+  // record, personal context, and the audit entries that mention them.
+  if (/^\/api\/users\/[^/]+\/export$/.test(p) && req.method === 'GET') {
+    const target = decodeURIComponent(p.split('/')[3]).toLowerCase();
+    const isSelf = target === user.username;
+    if (!isSelf && !requireRole(user, 'admin')) return json(res, 403, { error: 'admins only' });
+    const u = findUser(target);
+    if (!u) return json(res, 404, { error: 'no such user' });
+    const entries = readAudit(10000).filter(e =>
+      e.user === target || (e.detail && typeof e.detail === 'object' && e.detail.target === target));
+    const rooms = [...ROOMS.values()];
+    const doc = {
+      product: BRAND.product,
+      slug: BRAND.slug,
+      exportedAt: new Date().toISOString(),
+      schemaVersion: CONFIG.schemaVersion || 3,
+      user: Object.assign(publicUser(u), { assignments: u.assignments || [] }),
+      context: CONTEXT_STORE.users[target] || {},
+      rooms: { created: rooms.filter(r => r.createdBy === target).map(r => ({ id: r.id, name: r.name })) },
+      audit: entries,
+      retention: {
+        auditRetentionDays: auditRetentionDays(),
+        note: 'Audit entries are retained for security and are included here; they are subject to the same retention window.',
+      },
+    };
+    audit('user_export', user.username, user.role, { target, self: isSelf, entries: entries.length });
+    res.writeHead(200, {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Content-Disposition': `attachment; filename="cirrus-portal-${target}-export.json"`,
+    });
+    return res.end(JSON.stringify(doc, null, 2));
+  }
+
+  // Delete user (plan item 19: a real erasure — account + personal context +
+  // sessions). Shared room transcripts are intentionally left intact so other
+  // members' data is not altered; the audit trail is retained per the policy.
   if (/^\/api\/users\/[^/]+$/.test(p) && req.method === 'DELETE') {
     if (!requireRole(user, 'admin')) return json(res, 403, { error: 'admins only' });
     const target = decodeURIComponent(p.split('/')[3]).toLowerCase();
@@ -2835,8 +2982,10 @@ async function handleApi(req, res, url) {
     USERS = USERS.filter(x => x.username !== target);
     saveUsers(USERS);
     destroyUserSessions(target);
-    audit('user_delete', user.username, user.role, { target });
-    return json(res, 200, { ok: true });
+    const purged = ['account', 'sessions'];
+    if (CONTEXT_STORE.users[target]) { delete CONTEXT_STORE.users[target]; saveContextStore(CONTEXT_STORE); purged.push('context'); }
+    audit('user_delete', user.username, user.role, { target, purged });
+    return json(res, 200, { ok: true, purged });
   }
 
   // ── Context injection API (CI30) ──
@@ -2904,11 +3053,23 @@ async function handleApi(req, res, url) {
     return json(res, 200, { ok: true, context: ctx });
   }
 
-  // Audit log — admins only
+  // Audit log — admins only (plan item 19: response carries the retention policy)
   if (p === '/api/audit' && req.method === 'GET') {
     if (!requireRole(user, 'admin')) return json(res, 403, { error: 'admins only' });
     const limit = Math.min(parseInt(url.searchParams.get('limit') || '100', 10) || 100, 500);
-    return json(res, 200, { entries: readAudit(limit) });
+    return json(res, 200, {
+      entries: readAudit(limit),
+      retention: { days: auditRetentionDays(), maxBytes: auditMaxBytes() },
+    });
+  }
+
+  // Force an audit prune now (admin). Applies the same retention window + size
+  // cap as the boot/timer pass; returns how many entries were dropped.
+  if (p === '/api/audit/prune' && req.method === 'POST') {
+    if (!requireRole(user, 'admin')) return json(res, 403, { error: 'admins only' });
+    const removed = pruneAudit();
+    audit('audit_prune', user.username, user.role, { removed });
+    return json(res, 200, { ok: true, removed, retention: { days: auditRetentionDays(), maxBytes: auditMaxBytes() } });
   }
 
   // ── Gateway management (admin: Gateways view, Aug 2026) ───────────────
@@ -3228,6 +3389,7 @@ server.listen(CONFIG.port, CONFIG.bind, () => {
     console.log('            (all other routes are refused until setup completes — there is no default login)');
   }
   console.log(`   obs:     /healthz · /readyz · /metrics  (logs: ${LOG_FORMAT}${LOG_REQUESTS ? '' : ', requests off'})`);
+  console.log(`   compliance: audit retention ${auditRetentionDays() || '∞'} day(s) · rate limit ${rateLimitEnabled() ? rateLimitMax() + '/min/IP' : 'off'} · body ≤ ${Math.round(maxBodyBytes() / 1024)}KB`);
   console.log('   ready.');
 });
 server.on('error', (e) => {

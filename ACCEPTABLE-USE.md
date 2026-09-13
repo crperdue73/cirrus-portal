@@ -29,7 +29,8 @@ own trusted LAN), you agree to:
    have accounts.
 6. **Protect the data.** Users' conversations, files, and gateway tokens are
    sensitive. Secure backups, restrict file access, and retain data no longer than
-   you need it.
+   you need it. The portal ships data-retention and export/erasure controls for
+   this — see [`PRIVACY.md`](PRIVACY.md) and `ADMIN.md` §11.
 7. **Honor the licenses and terms of what you connect.** Any OpenClaw gateway or
    third-party service you wire up has its own terms; you are responsible for
    complying with them, and for having the right to connect those systems.

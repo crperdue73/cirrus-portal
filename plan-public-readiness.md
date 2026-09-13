@@ -101,7 +101,7 @@
   Fresh Debian VM (or throwaway container): full install → wizard → chat → upgrade
   → restore, captured as a repeatable script. Fix everything it surfaces.
 
-- [ ] **19. Compliance + abuse pass.**
+- [x] **19. Compliance + abuse pass.** ✅ 2026-09-13
   User data export/delete, audit-log retention policy, a plain-language privacy
   note, and abuse/rate controls for publicly exposed instances.
 
@@ -581,3 +581,31 @@
   probe, a missing cookie jar, running the process backend in the wrong cwd) —
   no product defect was found; the journey is green as shipped. The live box was
   left completely untouched (still the legacy `agent-portal`, no deploy).
+- **2026-09-13** — ✅ **Item 19 done.** Compliance + abuse pass. **(1) Data export/erasure:**
+  new `GET /api/users/:username/export` (self, or admin for anyone) returns a portable
+  `Content-Disposition: attachment` JSON document — account record (+ assignments), the
+  subject's personal context, rooms they created, and every audit entry mentioning them;
+  exports are themselves audited (`user_export`). `DELETE /api/users/:username` is now a real
+  **erasure**: it removes the account, the user's `portal-context.json` entry, and all their
+  sessions (`purged:['account','sessions','context']`) — shared room transcripts are
+  deliberately left intact so other members' data isn't rewritten. **(2) Audit-retention
+  policy:** new `auditRetentionDays` (default **90**, `0` = keep) + `auditMaxBytes` (default
+  1 MB) with a shared `pruneAudit()` (age filter, then size-cap trim, always keeping the newest
+  500) that runs **at boot**, **every 6 h**, after an over-cap append, and on demand via admin
+  `POST /api/audit/prune`; `GET /api/audit` now reports the active `retention` policy.
+  **(3) Plain-language privacy note:** new **`PRIVACY.md`** (what is stored + where, no
+  telemetry/no phone-home, cookies/sessions, retention table, export/erasure steps, what it
+  does *not* do, who to contact), cross-linked from README (docs index + Legal), `ADMIN.md`
+  §11, and `ACCEPTABLE-USE.md`. **(4) Abuse/rate controls:** new per-IP fixed-window
+  `rateCheck()` on **every non-probe route** (`rateLimitPerMinute`+`rateLimitBurst`, default
+  300+60/min; `/healthz`/`/readyz`/`/metrics` exempt) → `429` + `Retry-After` + a one-per-window
+  `rate_limited` audit entry + `cirrus_portal_rate_limited_total` metric; a `Content-Length`
+  **body cap** (`maxBodyBytes`, default 1 MB) → `413` before buffering; `readBody`'s streaming
+  guard now uses the same cap. All new keys added to `DEFAULTS`/env-map/example config, README
+  config block, and the boot banner. Evidence: `./lint.sh` clean (29 JS · 8 sh); full
+  **`./run-tests.sh` all green** (24 node:test + 17 standalone suites) including the new
+  **`test-compliance.js` 6/6** (retention reported+enforced via prune · rate limit 429+Retry-After
+  with probes exempt · 413 body cap · export self/admin vs peer-403 + audited · DELETE purges
+  account+context+on-disk context+sessions · PRIVACY/config/release/ADMIN/CHANGELOG wiring);
+  `./secret-scan.sh` clean on the repo **and** the freshly built `dist/cirrus-portal-2.2.0.tar.gz`
+  (now carrying `PRIVACY.md`). Docs/code/test only. Commit `PENDING`.

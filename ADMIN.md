@@ -306,5 +306,56 @@ with dropped capabilities, memory/CPU/PID limits, and `restart: unless-stopped`
 
 ---
 
+## 11. Compliance & abuse
+
+Controls for a portal that is reachable by people you do not personally know
+(plan item 19). All are config keys in `portal-config.json` (env overrides in
+parentheses).
+
+**Audit retention.** The audit log is bounded two ways: by age
+(`auditRetentionDays`, default **90**; `PORTAL_AUDIT_RETENTION_DAYS`; `0` keeps
+entries until the size cap) and by size (`auditMaxBytes`, default 1 MB;
+`PORTAL_AUDIT_MAX_BYTES`). Pruning runs **at boot**, **every 6 hours**, and on
+demand:
+
+```bash
+# inspect the active policy + newest entries
+curl -s -b cookie.txt http://127.0.0.1:18800/api/audit | less
+# force a prune now (admin, CSRF header required)
+curl -s -X POST -b cookie.txt -H "X-CSRF-Token: <token>" \
+  http://127.0.0.1:18800/api/audit/prune
+```
+
+**Rate limiting.** Every non-probe route is capped per client IP
+(`rateLimitPerMinute` + `rateLimitBurst`, default 300 + 60 per minute).
+`/healthz`, `/readyz`, and `/metrics` are exempt. Over-budget requests return
+`429` with `Retry-After`; the first rejection per IP per window is audited as
+`rate_limited` and counted in `cirrus_portal_rate_limited_total`. Raise the
+limits if legitimate classes of users are being throttled — or put the portal
+behind an edge proxy (Caddy/nginx) and rate-limit there instead.
+
+**Body-size cap.** Requests whose `Content-Length` exceeds `maxBodyBytes`
+(default 1 MB; `PORTAL_MAX_BODY_BYTES`) are rejected with `413` before the body
+is buffered.
+
+**Data export / erasure (GDPR/CCPA-style requests).**
+
+```bash
+# export a user's data (self, or admin for anyone) → downloads JSON
+curl -s -OJ -b cookie.txt http://127.0.0.1:18800/api/users/alice/export
+# erase a user (account + personal context + sessions; shared rooms untouched)
+curl -s -X DELETE -b cookie.txt -H "X-CSRF-Token: <token>" \
+  http://127.0.0.1:18800/api/users/alice
+```
+
+`DELETE` removes the account record, the user's entry in `portal-context.json`,
+and all their sessions. It deliberately **does not** rewrite shared room
+transcripts (that would alter other people's data) and **does not** delete
+audit entries (retained under the policy above). If a jurisdiction requires the
+audit trail itself reduced, lower `auditRetentionDays`. The operator-facing
+plain-language version of all this is [`PRIVACY.md`](PRIVACY.md).
+
+---
+
 *This runbook tracks the v3.0.0 public release. If a command here disagrees with
 `./install.sh --help`, the installer is authoritative — file a docs bug.*

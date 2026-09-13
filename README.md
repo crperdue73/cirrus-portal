@@ -180,7 +180,12 @@ scraper at `http://127.0.0.1:18800/metrics`.
   "loginLockoutSeconds": 300,
   "logFormat": "json",
   "logRequests": true,
-  "metricsPublic": false
+  "metricsPublic": false,
+  "auditRetentionDays": 90,
+  "auditMaxBytes": 1048576,
+  "rateLimitPerMinute": 300,
+  "rateLimitBurst": 60,
+  "maxBodyBytes": 1048576
 }
 ```
 
@@ -194,6 +199,24 @@ stayed token-free.
 
 Gateways can also be managed live from the UI (admin → **Gateways**): add,
 edit, enable/disable, remove — tokens are write-only in the API.
+
+### Compliance & abuse controls
+
+Public-facing instances get sensible brakes out of the box (plan item 19):
+
+- **Audit retention** — the audit log is pruned by age (`auditRetentionDays`,
+  default **90**; `0` = keep until the size cap) and by size (`auditMaxBytes`,
+  default 1 MB). Pruning runs at boot, every 6 hours, and on demand
+  (`POST /api/audit/prune`). `GET /api/audit` reports the active policy.
+- **Per-IP rate limit** — every non-probe route is capped per client IP
+  (`rateLimitPerMinute` + `rateLimitBurst`, default 300+60/min). `/healthz`,
+  `/readyz`, and `/metrics` are exempt so monitoring is never throttled.
+  Over-budget requests get `429` + `Retry-After` (and a `rate_limited` audit entry).
+- **Body-size cap** — request bodies over `maxBodyBytes` (default 1 MB) are
+  rejected with `413` before they are buffered.
+- **Data export / erasure** — `GET /api/users/<user>/export` (self, or admin for
+  anyone) returns a portable JSON copy; `DELETE /api/users/<user>` erases the
+  account, its personal context, and its sessions. See [`PRIVACY.md`](PRIVACY.md).
 
 ---
 
@@ -271,6 +294,7 @@ builds and uploads the versioned release artifact.
 | [`docs/DR-DRILL.md`](docs/DR-DRILL.md) | Encrypted + scheduled backups and the clean-VM restore drill (RPO/RTO) |
 | [`THREAT-MODEL.md`](THREAT-MODEL.md) | What it protects, from whom, and residual risk |
 | [`SECURITY.md`](SECURITY.md) | How to report a vulnerability |
+| [`PRIVACY.md`](PRIVACY.md) | Plain-language privacy note — what is stored, retention, export/delete |
 | [`ACCEPTABLE-USE.md`](ACCEPTABLE-USE.md) | Public-host baseline and prohibited uses |
 | [`CHANGELOG.md`](CHANGELOG.md) | What changed in each release (Keep a Changelog) |
 | [`RELEASING.md`](RELEASING.md) | Release checklist — build, sign, verify, tag, publish |
@@ -287,6 +311,7 @@ Cirrus Portal is licensed under the **Apache License, Version 2.0**.
 - [`NOTICE`](NOTICE) — attribution + Cirrus trademark reservation
 - [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) — dependency inventory (zero bundled third-party code)
 - [`SECURITY.md`](SECURITY.md) — how to report a vulnerability, and what to expect
+- [`PRIVACY.md`](PRIVACY.md) — what a portal stores, for how long, and how to export/delete it
 - [`ACCEPTABLE-USE.md`](ACCEPTABLE-USE.md) — public-host baseline and prohibited uses
 
 "Cirrus", "Cirrus Portal", and "Cirrus Core" are trademarks of CRPerdue
