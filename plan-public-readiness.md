@@ -619,3 +619,18 @@
   **Still open:** GPG-sign the checksums (`RELEASE_GPG_KEY`); optional GitHub Release + announcement; the
   live-box migration side-effects (rotate admin creds, TLS via `--domain`, container rename
   `agent-portal`→`cirrus-portal`, chown state to `10001:10001`).
+- **2026-09-13 (run 20:41)** — ⛔ **BLOCKED: Item 20 (Public release) — remaining work is gated; box stays
+  unticked.** First unchecked item is again #20. Re-verified the real state before acting: the repo IS
+  public (`crperdue73/cirrus-portal`, `main`), `VERSION` is `3.0.0`, tag `v3.0.0` exists, and a
+  **published** GitHub Release `v3.0.0` (not a draft) carries the tarball + SBOM + `SHA256SUMS` **and**
+  `SHA256SUMS.asc` plus the public release key. I confirmed with `gpg --verify` → **Good signature** from
+  `Cirrus Portal Release <release@crperdue.com>` (fp `0A12…417D`) over `dist/SHA256SUMS` — so the earlier
+  “checksums are unsigned” line is now stale; signing is done (`b4f578b`). What remains is exactly the
+  gated residue: (1) **the public announcement** (audience + copy) — a public/published action
+  (`RELEASING.md` §9); (2) **post-release monitoring + issue triage** — standing that up (external service
+  / spend / repo settings) is not mine to decide; (3) **the live-box migration side-effects** (rotate admin
+  creds, TLS via `--domain`, container rename `agent-portal`→`cirrus-portal`, chown state to
+  `10001:10001`) — needs a quiet window + Dad's OK, not mid-day. Per the run rules **no public action was
+  taken** (nothing announced, nothing published, no live deploy) and the item is **not** ticked.
+  **Decision needed from Dad:** (a) approve the announcement + audience (or say skip it); (b) approve/scope
+  the post-release monitoring + triage setup; (c) name the quiet window for the live-box migration.
