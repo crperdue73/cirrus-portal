@@ -634,3 +634,11 @@
   taken** (nothing announced, nothing published, no live deploy) and the item is **not** ticked.
   **Decision needed from Dad:** (a) approve the announcement + audience (or say skip it); (b) approve/scope
   the post-release monitoring + triage setup; (c) name the quiet window for the live-box migration.
+- **2026-09-13 (run 18:41)** — ⛔ **Item 20 re-checked: still BLOCKED, no change.** Re-verified the real state:
+  `VERSION` = `3.0.0`, tag `v3.0.0`, repo `crperdue73/cirrus-portal` public on `main`, dist carries the
+tarball + SBOM + `SHA256SUMS` + `SHA256SUMS.asc` (signed by `Cirrus Portal Release <release@crperdue.com>`),
+and no new instruction has arrived from Dad. The only remaining work is the gated residue (announcement ·
+post-release monitoring + triage · live-box migration) — all require a public action / spend / a quiet
+window, so **no public action was taken and nothing was ticked**. **Standing block — subsequent runs will
+NOT add duplicate BLOCKED entries until Dad decides;** refer to the 2026-09-13 16:42 note above for the
+exact decisions needed (announce + audience? monitoring scope? quiet window?).
