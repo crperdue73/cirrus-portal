@@ -89,7 +89,7 @@
   A 2.x → 3.x migrator (credential rotation, config-schema migration, role model)
   with `--dry-run` and backup-first, tested against a copy of real state.
 
-- [ ] **16. Observability.**
+- [x] **16. Observability.** ✅ 2026-09-12
   `/healthz` + `/readyz`, structured JSON logs, request IDs, and basic metrics;
   wire them into `install.sh status` / `doctor`.
 
@@ -481,3 +481,31 @@
   config, `admin`/`admin`). A `--dry-run` against the real state plans **12 changes** and rotates 3
   accounts; running it for real + `./install.sh upgrade` is a deliberate live migration to schedule,
   not something to do mid-day. Nothing was changed on the live box this run.
+- **2026-09-12** — ✅ **Item 16 done.** Observability. Added an open **`GET /healthz`**
+  (liveness: `200 {status:"ok",product,version,uptimeSeconds}`, answers even in first-run SETUP
+  mode) and **`GET /readyz`** (readiness: `200 ready` once out of SETUP, `503 setup_required`
+  before; reports gateway/user counts and never gates on gateway connectivity). Added a
+  dependency-free **`GET /metrics`** in Prometheus text format — `cirrus_portal_up`,
+  `build_info{version,product}`, `uptime_seconds`, `setup_required`, `http_requests_total{method,status}`,
+  `http_in_flight`, `http_request_duration_seconds_{sum,count}`, `sessions_active`,
+  `gateways_{connected,configured}`, `users{role}`, `logins_total`, `login_failures_total`,
+  `csrf_rejects_total`, `audit_entries` — served **loopback-only by default** (remote needs an admin
+  session, or `metricsPublic:true`). Every request now carries an **`X-Request-Id`** (echoed from the
+  caller else minted) and emits **one structured JSON access-log line** on finish (method · path ·
+  status · durationMs · requestId · client IP); new config keys **`logFormat`** (`json` default,
+  `text` opt), **`logRequests`**, **`metricsPublic`** (+ `PORTAL_LOG_FORMAT`/`PORTAL_LOG_QUIET` env).
+  Counters wired into login success/failure/throttle **and every CSRF-reject path**; boot banner
+  advertises the endpoints + log format. **`healthcheck.js`** now probes `/healthz` (2xx/3xx =
+  healthy). **`install.sh`** `status` probes `/healthz`+`/readyz` (parses version/uptime) and `doctor`
+  checks `logFormat` plus the three endpoints. Docs: README (Observability section + feature bullet +
+  config keys), ADMIN §3 (endpoint table + log notes), THREAT-MODEL §5.7 (metrics/log disclosure, JSON
+  log-injection safety, volume), CHANGELOG, config example. Evidence: `./lint.sh` clean (26 JS · 6 sh);
+  **`node --test` 24/24** (new **`test/observability.test.js` 5/5**: healthz open + readyz ready/setup ·
+  metrics text + counter movement incl. csrf-reject · request-id echo+mint + parseable JSON logs ·
+  install/docs wiring); `./run-tests.sh` **all green** incl. every standalone suite; `secret-scan.sh`
+  clean on the repo **and** on the freshly built `dist/cirrus-portal-2.2.0.tar.gz`. Commit `ad49339`.
+  **FOLLOW-UP (quiet window + Dad's OK):** the LIVE box still runs the legacy 2.x container
+  (`agent-portal`), which has no `/healthz`/`/readyz`/`/metrics`; `./install.sh status` now logs
+  `/healthz did not report ok` + `/readyz 404` there (2 checks fail) until the next
+  `./install.sh upgrade`/rebuild picks up this code. Read-only inspection only — nothing was changed
+  on the live box this run.
