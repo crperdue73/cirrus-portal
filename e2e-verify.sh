@@ -150,7 +150,18 @@ prep_state_files() { # pre-create the bind-mount targets (files, not dirs)
   done
   [ -s "$BOX/portal-secrets.json" ] || printf '{}\n' > "$BOX/portal-secrets.json"
   chmod 600 "$BOX/portal-secrets.json"
-  chown 10001:10001 "$BOX"/portal-*.json "$BOX"/portal-audit.log 2>/dev/null || true
+  # Hand the state to the container's uid (10001) so it can read/write the
+  # bind-mounts. Root can chown directly; an unprivileged host (e.g. a CI
+  # runner) may need sudo — and if neither works we open the throwaway state's
+  # perms instead. Without this the server can't read its config and silently
+  # falls back to defaults (wrong port → misleading "portal never answered").
+  local files=("$BOX"/portal-*.json "$BOX"/portal-audit.log)
+  if chown 10001:10001 "${files[@]}" 2>/dev/null; then :
+  elif sudo -n chown 10001:10001 "${files[@]}" 2>/dev/null; then :
+  else
+    warn "unprivileged host: cannot chown state to 10001:10001 — opening perms so the container uid can read/write it"
+    chmod 666 "${files[@]}" 2>/dev/null || true
+  fi
 }
 
 copy_code() { # copy_code TARGET

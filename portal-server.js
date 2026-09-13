@@ -218,7 +218,8 @@ function loadConfig() {
     const user = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
     Object.assign(cfg, user);
   } catch (e) {
-    console.warn('[portal] no portal-config.json, using defaults');
+    const exists = fs.existsSync(CONFIG_PATH);
+    console.warn(`[portal] portal-config.json ${exists ? `exists but could not be read (${e.code || e.message})` : 'not found'} — using defaults (port ${cfg.port}, bind ${cfg.bind})`);
   }
   // Environment overrides (Docker-friendly); file still wins for anything not set.
   const envMap = {
