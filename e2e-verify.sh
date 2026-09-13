@@ -158,13 +158,15 @@ prep_state_files() { # pre-create the bind-mount targets (files, not dirs)
   # server can't read its config and silently falls back to defaults (wrong
   # port → misleading "portal never answered").
   if [ "$BACKEND" = "docker" ]; then
+    # The container runs as uid 10001 and must read/write the bind-mounted
+    # state; the host must also read it back to verify persistence (step 3+).
+    # Hand ownership over when we can, and *always* open the perms on this
+    # throwaway workspace so both sides can read/write no matter who runs the
+    # script — a non-root CI host can't chown, and a 10001-owned 0600 file is
+    # then unreadable to the host's verifier (and vice-versa).
     local files=("$BOX"/portal-*.json "$BOX"/portal-audit.log)
-    if chown 10001:10001 "${files[@]}" 2>/dev/null; then :
-    elif sudo -n chown 10001:10001 "${files[@]}" 2>/dev/null; then :
-    else
-      warn "unprivileged host: cannot chown state to 10001:10001 — opening perms so the container uid can read/write it"
-      chmod 666 "${files[@]}" 2>/dev/null || true
-    fi
+    chown 10001:10001 "${files[@]}" 2>/dev/null || true
+    chmod 666 "${files[@]}" 2>/dev/null || true
   fi
 }
 
