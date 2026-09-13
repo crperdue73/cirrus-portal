@@ -16,6 +16,10 @@ internal 2.x console into a self-hosted product people can install on their own
 box without shooting themselves in the foot.
 
 ### Added
+- **Clean-box end-to-end verifier** (`e2e-verify.sh`) — drives the whole
+  operator journey on a throwaway box (fresh install → `/setup` wizard → chat →
+  upgrade → restore) with a `docker` (hardened container) or `process`
+  (Docker-free) backend; wired into the test suite and CI.
 - **First-run setup wizard** (`/setup`) — a fresh box with no accounts serves a
   browser wizard to create the admin, choose bind/port, pick TLS intent, and add
   the first gateway. Until it completes, every other route returns `503`.

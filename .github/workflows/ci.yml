@@ -1,7 +1,7 @@
 name: ci
 
-# Cirrus Portal — plan item 13. The single CI entrypoint:
-#   lint → test → secret-scan → build the release artifact.
+# Cirrus Portal — plan item 13 / 18. The single CI entrypoint:
+#   lint → test (incl. clean-box E2E) → secret-scan → build the release artifact.
 # Runs on every push (branches + tags) and on pull requests.
 
 on:
@@ -36,6 +36,8 @@ jobs:
           node-version: '22'
       - name: Full test suite (node:test + smoke tests)
         run: ./run-tests.sh
+      - name: Clean-box end-to-end verify (throwaway container)
+        run: ./e2e-verify.sh --backend docker
 
   secret-scan:
     name: secret-scan

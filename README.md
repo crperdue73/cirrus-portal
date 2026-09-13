@@ -237,16 +237,25 @@ plus a static UI. The repo ships its own checks:
 ```bash
 ./run-tests.sh    # node:test suite (auth, RBAC, rooms, config, route smoke) + smoke tests
 ./lint.sh         # JS/shell syntax, JSON validity, line endings
+./e2e-verify.sh   # clean-box E2E: fresh install → wizard → chat → upgrade → restore
 ./release.sh      # reproducible dist/cirrus-portal-<version>.tar.gz + SHA256SUMS + SBOM
 ./secret-scan.sh  # grep the repo (or a built tarball) for leaked secrets
 ```
 
+`./e2e-verify.sh` proves the whole operator journey on a **throwaway box** and
+never touches a live install: it installs a fresh instance (Docker-free install
+plan + a throwaway container with the hardened flags), drives the first-run
+**wizard**, exercises **chat**, **upgrades** (rebuild + restart on the same
+state), and **restores** an encrypted backup after a simulated total loss. Use
+`--backend process` for the Docker-free "fresh VM" path; `--keep` keeps the
+workspace for inspection.
+
 Cutting a release is a checklist: see [`RELEASING.md`](RELEASING.md). Notable
 changes per version are in [`CHANGELOG.md`](CHANGELOG.md).
 
-CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs **lint → test →
-secret-scan** on every push and pull request, then builds and uploads the
-versioned release artifact.
+CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs **lint → test
+(incl. the clean-box E2E) → secret-scan** on every push and pull request, then
+builds and uploads the versioned release artifact.
 
 ---
 

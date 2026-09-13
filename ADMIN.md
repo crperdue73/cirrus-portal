@@ -128,6 +128,23 @@ status`/`doctor` check the format and probe the three endpoints. Only the
 counters in `/metrics` are in-process (reset on restart) — the durable record is
 `portal-audit.log`.
 
+### Verifying an install end-to-end
+
+Before you trust a box (a new host, a new release, or after a big change), run
+the clean-box verifier from the **source/release tree**:
+
+```bash
+./e2e-verify.sh --backend docker    # a throwaway hardened container
+./e2e-verify.sh --backend process   # Docker-free: the "fresh VM" path
+```
+
+It installs a fresh instance in a throwaway workspace, completes the first-run
+**wizard**, exercises **chat** (create a room + post a message + reload it from
+disk), **upgrades** (rebuild + restart on the same state) and **restores** an
+encrypted backup after a simulated total loss — then exits non-zero if any step
+fails. It never touches a live install and removes everything it created
+(`--keep` leaves the workspace for inspection). The same checks run in CI.
+
 ---
 
 ## 4. Backup & restore
