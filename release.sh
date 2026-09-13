@@ -73,6 +73,7 @@ BUILD_DATE="$(date -u -d "@$SOURCE_DATE_EPOCH" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
 # Files that ship in the distribution (code + installer + docs).
 FILES=(
   install.sh
+  backup.sh
   migrate.js
   portal-server.js
   portal.html
@@ -100,6 +101,7 @@ FILES=(
   TROUBLESHOOTING.md
   THREAT-MODEL.md
   docs/screenshots/README.md
+  docs/DR-DRILL.md
   docs/screenshots/01-login.png
   docs/screenshots/02-agents-chat.png
   docs/screenshots/03-dashboard.png

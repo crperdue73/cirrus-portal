@@ -94,9 +94,17 @@ condition is resolved.
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| After restore, gateways have no token | Backups **exclude secrets** by design | Re-provide `GATEWAY_TOKEN=…` or restore your copy of `portal-secrets.json`. |
+| After a **plaintext** restore, gateways have no token | Plain snapshots exclude secrets by design | Re-provide `GATEWAY_TOKEN=…`, or restore an encrypted `--with-secrets` archive. |
 | Restored install can't reach the gateway | Device identity differs | Restore `portal-device.json` too, or re-approve the device on each gateway. |
 | `./install.sh backup` writes nowhere | Wrong working directory | Run it from the release directory; snapshots land in `./backups/`. |
+| `no backup passphrase` | No passphrase configured on a headless box | Set `PORTAL_BACKUP_PASSPHRASE`, write `./portal-backup-passphrase`, or run `./backup.sh create --init-passphrase`. |
+| `decryption failed` / `ciphertext hash mismatch` | Wrong passphrase, or a corrupt/tampered archive | Use the recorded passphrase; compare against the `.sha256` sidecar, else fall back to an older archive. |
+| `file hashes do not match SHA256SUMS` | Archive was altered or partially copied | Re-copy the archive intact; do not restore it. |
+| Backups grow unbounded | No retention set | Use `--keep N` (`./backup.sh create --with-secrets --keep 14`); the schedule sets 14 by default. |
+| Scheduled backups never run | Timer not enabled / host has no systemd | `systemctl list-timers cirrus-portal-backup.timer`; else use the `/etc/cron.d` line printed by `./backup.sh schedule`. |
+
+See [`docs/DR-DRILL.md`](docs/DR-DRILL.md) for the full backup/restore/DR model
+and the clean-VM restore drill.
 
 ---
 

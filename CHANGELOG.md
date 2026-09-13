@@ -38,6 +38,14 @@ box without shooting themselves in the foot.
 text), per-request `X-Request-Id`, and structured JSON request logs
 (`logFormat`, `logRequests`, `metricsPublic`); wired into `install.sh status` /
 `doctor`.
+- **Encrypted backups & disaster recovery** — a `backup.sh` helper:
+  `create --with-secrets` (AES-256 archive incl. gateway tokens + device
+  identity), `verify` (cipher hash → `SHA256SUMS` → manifest), `restore`
+  (verify → snapshot current → atomic write), `drill` (proves a clean-VM
+  restore and reports the measured RTO), and `schedule` (systemd timer + cron
+  fallback). `./install.sh backup` encrypts automatically when a backup
+  passphrase is set; RPO/RTO targets and the drill live in
+  [`docs/DR-DRILL.md`](docs/DR-DRILL.md).
 - **Public installer v3** — `--domain`, `--tls`, `--public`, `--non-interactive`,
   `--dry-run`, rollback-on-failure, and extended preflight (DNS/TLS/firewall).
 - **Public documentation set** — README quickstart plus `ADMIN.md`,

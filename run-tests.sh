@@ -7,7 +7,7 @@
 #       route smoke): `node --test test/*.test.js`
 #    2. the standalone smoke tests in the repo root (test-*.js): credentials ·
 #       secrets · setup · tls · network · auth · container · installer · docs ·
-#       legal · public-docs · release
+#       legal · public-docs · release · migrate · backup
 #
 #  Zero dependencies. Usage: ./run-tests.sh
 # ═══════════════════════════════════════════════════════════════════════════

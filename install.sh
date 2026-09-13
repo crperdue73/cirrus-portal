@@ -132,8 +132,9 @@ $C_CYN Commands:$C_RST
               loopback/TLS defaults. Add --dry-run to preview only.
   status      Health check. Exit 0 = healthy, 1 = problems. Scriptable.
   doctor      Deep diagnostics (status + config, device, logs, disk).
-  backup      Create a state+config snapshot tarball in ./backups/.
-  restore F   Restore state+config from a backup tarball.
+  backup      State+config snapshot (encrypted via ./backup.sh when a
+              passphrase exists).
+  restore F   Restore state+config (plain .tar.gz, or encrypted .gpg/.enc).
   uninstall   Stop and remove the container (files kept unless --purge).
   version     Print version and exit.
 
@@ -178,6 +179,15 @@ $C_CYN Firewall (ufw):$C_RST
     sudo ufw allow 80,443/tcp     # with --domain (HTTPS)
     sudo ufw allow 18800/tcp      # direct / loopback-tunnelled installs
 
+$C_CYN Backups & disaster recovery (v3):$C_RST
+  ./backup.sh create --with-secrets   Encrypted (AES-256) snapshot incl. secrets.
+  ./backup.sh verify FILE             Decrypt + integrity-check, no live effect.
+  ./backup.sh restore FILE            Verify, snapshot current state, restore.
+  ./backup.sh drill                   Prove a clean-VM restore (RTO evidence).
+  ./backup.sh schedule --install      systemd timer (or cron) for recurring backups.
+  ./install.sh backup is encrypted automatically when PORTAL_BACKUP_PASSPHRASE
+  (or ./portal-backup-passphrase) is set. See ADMIN.md §4 and docs/DR-DRILL.md.
+
 $C_CYN Preflight & rollback (v3):$C_RST
   Before touching any state, install runs a preflight: host OS, >500 MB disk,
   the portal port, DNS for --domain, TLS:443 reachability, and a firewall
@@ -203,6 +213,9 @@ $C_CYN Examples:$C_RST
   BIND=0.0.0.0 ./install.sh install --insecure-plaintext   # trusted LAN only
   ./install.sh status
   ./install.sh backup
+  PORTAL_BACKUP_PASSPHRASE=... ./install.sh backup      # encrypted backup incl. secrets
+  ./backup.sh create --init-passphrase --with-secrets   # encrypted DR backup
+  ./backup.sh drill                                     # prove a clean-VM restore
 EOF
 }
 
@@ -577,6 +590,15 @@ run_doctor() {
 #  backup / restore
 # ═══════════════════════════════════════════════════════════════════════════
 run_backup() {
+  # Prefer the encrypted DR helper (plan item 17) whenever a passphrase is set.
+  local pf="${PORTAL_BACKUP_PASSPHRASE_FILE:-$DIR/portal-backup-passphrase}"
+  if [ -x "$DIR/backup.sh" ] && { [ -n "${PORTAL_BACKUP_PASSPHRASE:-}" ] || [ -f "$pf" ]; }; then
+    info "encrypted backup via ./backup.sh (state + secrets, AES-256)"
+    "$DIR/backup.sh" create --with-secrets || die "encrypted backup failed"
+    return 0
+  fi
+  [ -x "$DIR/backup.sh" ] && warn "no backup passphrase set — writing an UNENCRYPTED snapshot."
+  [ -x "$DIR/backup.sh" ] && warn "for encrypted backups + DR: ./backup.sh create --init-passphrase"
   mkdir -p backups
   local stamp out
   stamp="$(date +%Y%m%d-%H%M%S)"
@@ -588,12 +610,19 @@ run_backup() {
   tar czf "$out" "${existing[@]}"
   chmod 600 "$out"
   ok "backup written: $out ($(du -h "$out" | cut -f1))"
-  info "note: gateway tokens are NOT in this backup — secrets never touch backups."
+  info "note: gateway tokens are NOT in this backup — secrets never touch plaintext snapshots."
   info "      After a restore, re-provide GATEWAY_TOKEN=... or copy $SECRETS_FILE separately."
   log "restore with: ./install.sh restore $out"
 }
 
 run_restore() {
+  # Encrypted DR archives (plan item 17) are restored by backup.sh, not tar.
+  case "$RESTORE_FILE" in
+    *.gpg|*.enc)
+      [ -x "$DIR/backup.sh" ] || die "backup.sh not found next to install.sh"
+      "$DIR/backup.sh" restore "$RESTORE_FILE" || die "restore failed"
+      return 0 ;;
+  esac
   local f="$RESTORE_FILE"
   [ -f "$f" ] || die "backup file not found: $f"
   [ "$YES" = "1" ] || {

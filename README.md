@@ -115,15 +115,23 @@ Firewall: `--firewall` opens the right port(s) in `ufw`.
 ./install.sh migrate [--dry-run] # 2.x → 3.x schema migration (backup-first)
 ./install.sh status              # scriptable health check (exit 0/1)
 ./install.sh doctor              # deep diagnostics
-./install.sh backup              # state + config snapshot → ./backups/
-./install.sh restore FILE        # restore a snapshot
+./install.sh backup              # state+config snapshot → ./backups/ (encrypted when a passphrase is set)
+./install.sh restore FILE        # restore a snapshot (.tar.gz or encrypted .gpg/.enc)
 ./install.sh uninstall [--purge] # stop container (optionally delete files)
+
+# Encrypted backups + disaster recovery (./backup.sh):
+./backup.sh create --with-secrets # AES-256 archive incl. secrets → ./backups/
+./backup.sh verify FILE           # integrity-check an archive, no live effect
+./backup.sh drill                 # prove a clean-VM restore (RTO evidence)
+./backup.sh schedule --install    # recurring encrypted backups (systemd timer / cron)
 ```
 
 The full operator runbook is [`ADMIN.md`](ADMIN.md). Upgrades (including the
 2.x → 3.x drill and the automated `./install.sh migrate`) are in
-[`UPGRADING.md`](UPGRADING.md). When something breaks,
-start at [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md).
+[`UPGRADING.md`](UPGRADING.md). Backup/restore/disaster-recovery — including the
+RPO/RTO targets and the clean-VM restore drill — is in
+[`docs/DR-DRILL.md`](docs/DR-DRILL.md). When something breaks, start at
+[`TROUBLESHOOTING.md`](TROUBLESHOOTING.md).
 
 `release.sh` builds the versioned, **reproducible**, checksummed distribution
 (`dist/cirrus-portal-<ver>.tar.gz` + `SHA256SUMS` + a CycloneDX **SBOM`) containing
@@ -251,6 +259,7 @@ versioned release artifact.
 | [`REPLICATION.md`](REPLICATION.md) | Installing on N servers (fleet recipe) |
 | [`UPGRADING.md`](UPGRADING.md) | Upgrade + 2.x → 3.x migration drill |
 | [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) | Symptom → cause → fix |
+| [`docs/DR-DRILL.md`](docs/DR-DRILL.md) | Encrypted + scheduled backups and the clean-VM restore drill (RPO/RTO) |
 | [`THREAT-MODEL.md`](THREAT-MODEL.md) | What it protects, from whom, and residual risk |
 | [`SECURITY.md`](SECURITY.md) | How to report a vulnerability |
 | [`ACCEPTABLE-USE.md`](ACCEPTABLE-USE.md) | Public-host baseline and prohibited uses |

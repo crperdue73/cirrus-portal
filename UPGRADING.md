@@ -141,13 +141,16 @@ away. To roll back:
 # Restore code from your previous release, then:
 docker compose up -d --build
 
-# Or restore a full state+config snapshot:
+# Or restore a state+config snapshot (plain .tar.gz or encrypted .gpg/.enc):
 ./install.sh restore backups/portal-backup-<timestamp>.tar.gz
 ```
 
-Device identity and state are untouched by either direction. Because backups
-**exclude secrets**, re-provide `GATEWAY_TOKEN=…` or restore your copy of
-`portal-secrets.json` after a full restore.
+Device identity and state are untouched by either direction. A **plain**
+snapshot excludes secrets, so re-provide `GATEWAY_TOKEN=…` or restore your copy
+of `portal-secrets.json` after it. Prefer an **encrypted** backup instead —
+`./backup.sh create --with-secrets` captures tokens + device identity inside an
+AES-256 archive (see [`docs/DR-DRILL.md`](docs/DR-DRILL.md)), which restores a
+complete install in one step.
 
 ---
 

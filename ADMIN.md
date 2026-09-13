@@ -132,21 +132,40 @@ counters in `/metrics` are in-process (reset on restart) — the durable record 
 
 ## 4. Backup & restore
 
+Two layers, both shipped:
+
 ```bash
-./install.sh backup                       # → backups/portal-backup-<timestamp>.tar.gz
-./install.sh restore backups/portal-backup-<timestamp>.tar.gz
+# Encrypted backups + disaster recovery (recommended) — ./backup.sh
+./backup.sh create --init-passphrase      # one-time: generate the passphrase (0600)
+./backup.sh create --with-secrets         # → backups/cirrus-backup-<stamp>.tar.gz.gpg
+./backup.sh verify FILE                   # integrity-check, no live effect
+./backup.sh restore FILE                  # verify → snapshot current → restore
+./backup.sh drill                         # prove a clean-VM restore (RTO evidence)
+sudo ./backup.sh schedule --install       # systemd timer (cron fallback printed)
+
+# Quick state+config snapshot — ./install.sh backup
+./install.sh backup                       # encrypted automatically when a passphrase is set
+./install.sh restore FILE                 # accepts plain .tar.gz and encrypted .gpg/.enc
 ```
 
-- Backups contain **state + config** — not gateway tokens or the secrets file.
-  After a restore, re-provide `GATEWAY_TOKEN=…` or copy `portal-secrets.json`
-  separately (it is deliberately excluded from the snapshot).
-- The restore path rebuilds the container with the restored config.
+- **`./backup.sh` is the DR path.** `create --with-secrets` produces an
+  **AES-256 encrypted** archive (`gpg`, or `openssl` where `gpg` is absent) that
+  includes config, state, **gateway tokens and the device identity** — safe
+  *because* the archive is encrypted. A plaintext snapshot never carries
+  secrets.
+- The passphrase resolves from `PORTAL_BACKUP_PASSPHRASE`, a passphrase file
+  (`./portal-backup-passphrase`, 0600), or an interactive prompt — never the
+  command line. **Store it off-box:** without it, backups are unrecoverable.
+- `restore` verifies the archive first, snapshots the *current* state to
+  `backups/pre-restore-<stamp>/`, then writes file-by-file. Rebuild your
+  container with `./install.sh upgrade` afterward.
 - **Back up before every upgrade and before any risky change.**
-- For disaster recovery, keep an offline copy of `portal-secrets.json` (0600)
-  and `portal-device.json` in your secret store — losing the device identity
-  means re-approving the portal on every gateway.
+- Retention: `--keep N` keeps the newest N archives (the schedule uses 14).
+  Keep one copy off-box; a same-disk backup does not survive disk loss.
 
-See also [`UPGRADING.md`](UPGRADING.md) for the backup-first upgrade drill.
+See [`docs/DR-DRILL.md`](docs/DR-DRILL.md) for the RPO/RTO targets and the
+clean-VM restore drill; [`UPGRADING.md`](UPGRADING.md) for the backup-first
+upgrade drill.
 
 ---
 

@@ -22,5 +22,6 @@ portal.log
 install.log
 portal-credentials.txt
 portal-first-run.txt
+portal-backup-passphrase
 backups/
 dist/
