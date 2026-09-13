@@ -608,4 +608,4 @@
   with probes exempt · 413 body cap · export self/admin vs peer-403 + audited · DELETE purges
   account+context+on-disk context+sessions · PRIVACY/config/release/ADMIN/CHANGELOG wiring);
   `./secret-scan.sh` clean on the repo **and** the freshly built `dist/cirrus-portal-2.2.0.tar.gz`
-  (now carrying `PRIVACY.md`). Docs/code/test only. Commit `PENDING`.
+  (now carrying `PRIVACY.md`). Docs/code/test only. Commit `30482dd`.
