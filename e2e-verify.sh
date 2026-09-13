@@ -112,9 +112,9 @@ print(v if not isinstance(v,(dict,list)) else json.dumps(v))' "$1" "$2"
 }
 
 # HTTP: sets HTTP (status code) and writes the body to $RESP.
-http_get() { HTTP="$(curl -sS -o "$RESP" -w '%{http_code}' --max-time 15 -b "$JAR" -c "$JAR" "http://127.0.0.1:$PORT$1" 2>/dev/null)" || HTTP=000; }
+http_get() { HTTP="$(curl -sS --noproxy '*' -o "$RESP" -w '%{http_code}' --max-time 15 -b "$JAR" -c "$JAR" "http://127.0.0.1:$PORT$1" 2>/dev/null)" || HTTP=000; }
 http_post() { # http_post PATH JSON
-  local args=(-sS -o "$RESP" -w '%{http_code}' --max-time 15 -b "$JAR" -c "$JAR" -H 'Content-Type: application/json')
+  local args=(-sS --noproxy '*' -o "$RESP" -w '%{http_code}' --max-time 15 -b "$JAR" -c "$JAR" -H 'Content-Type: application/json')
   [ -n "${CSRF:-}" ] && args+=(-H "X-CSRF-Token: $CSRF")
   HTTP="$(curl "${args[@]}" -d "$2" "http://127.0.0.1:$PORT$1" 2>/dev/null)" || HTTP=000
 }
@@ -189,13 +189,32 @@ box_start() {
 wait_http() {
   local n=0 code
   while [ "$n" -lt 60 ]; do
-    code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 3 "http://127.0.0.1:$PORT/" 2>/dev/null)" || code=000
+    code="$(curl -sS --noproxy '*' -o /dev/null -w '%{http_code}' --max-time 3 "http://127.0.0.1:$PORT/" 2>/dev/null)" || code=000
     case "$code" in 000|"") : ;; *) info "portal answered HTTP $code"; return 0 ;; esac
     n=$((n+1)); sleep 1
   done
-  if [ "$BACKEND" = "docker" ]; then docker logs "$NAME" 2>&1 | tail -20 >&2
+  if [ "$BACKEND" = "docker" ]; then
+    diag_docker
+    docker logs "$NAME" 2>&1 | tail -20 >&2
   else tail -20 "$LOGS/server.log" >&2 || true; fi
   die "portal never answered on 127.0.0.1:$PORT"
+}
+
+diag_docker() { # why can't the host reach the container's loopback port?
+  {
+    echo "── wait_http diagnostics (host cannot reach 127.0.0.1:$PORT) ──"
+    echo "curl -v from host:"
+    curl -v --noproxy '*' --max-time 5 "http://127.0.0.1:$PORT/" 2>&1 | sed 's/^/  | /' | tail -15
+    echo "proxy env: $(env | grep -i proxy | tr '\n' ' ' || true)"
+    echo "network mode: $(docker inspect -f '{{.HostConfig.NetworkMode}}' "$NAME" 2>&1)"
+    echo "state: $(docker inspect -f '{{.State.Status}} started={{.State.StartedAt}} exit={{.State.ExitCode}}' "$NAME" 2>&1)"
+    echo "container IPs: $(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' "$NAME" 2>&1)"
+    echo "published ports: $(docker inspect -f '{{json .NetworkSettings.Ports}}' "$NAME" 2>&1)"
+    echo "host listeners on :$PORT:"; (ss -ltnp 2>/dev/null || netstat -ltnp 2>/dev/null) | grep ":$PORT " | sed 's/^/  /' || echo "  (none)"
+    echo "in-container probe (docker exec):"
+    docker exec "$NAME" wget -qO- -T 5 "http://127.0.0.1:$PORT/" 2>&1 | head -3 | sed 's/^/  /' || echo "  (failed)"
+    echo "── end diagnostics ──"
+  } >&2
 }
 
 box_stop() {
