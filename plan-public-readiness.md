@@ -609,3 +609,15 @@
   account+context+on-disk context+sessions · PRIVACY/config/release/ADMIN/CHANGELOG wiring);
   `./secret-scan.sh` clean on the repo **and** the freshly built `dist/cirrus-portal-2.2.0.tar.gz`
   (now carrying `PRIVACY.md`). Docs/code/test only. Commit `30482dd`.
+- **2026-09-13** — ⛔ **BLOCKED: Item 20 (Public release) — needs Dad's explicit go-ahead.** This is the
+  first unchecked item and it is **entirely a public/release action**: tag `v3.0.0`, publish the repo +
+  docs, announce, and stand up post-release monitoring/triage. The plan flags it "(Requires Dad's explicit
+  go-ahead.)" and `RELEASING.md` step 9 already gates publish/announce on Dad. Per the run rules **no public
+  action was taken** — nothing tagged, pushed, published, or announced; the version was **not** bumped; the
+  box is **not** ticked. Items 1–19 are complete/green and everything needed for a cut is in place
+  (`./run-tests.sh` + `./secret-scan.sh` pass; `./release.sh` builds a reproducible, sign-capable
+  `dist/cirrus-portal-<ver>.*`). **Decision needed from Dad:** (1) explicit **GO** to cut + publish v3.0.0;
+  (2) confirm the `3.0.0` version string/changelog (VERSION is still `2.2.0`); (3) the publish destination
+  (public repo remote? website?) and whether/where to announce; (4) sign-off on the live-box migration a
+  release implies (rotate admin creds, TLS via `--domain`, container rename `agent-portal`→`cirrus-portal`,
+  chown state to `10001:10001`). No release work will be performed until decided.
