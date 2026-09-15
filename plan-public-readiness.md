@@ -642,3 +642,21 @@ post-release monitoring + triage · live-box migration) — all require a public
 window, so **no public action was taken and nothing was ticked**. **Standing block — subsequent runs will
 NOT add duplicate BLOCKED entries until Dad decides;** refer to the 2026-09-13 16:42 note above for the
 exact decisions needed (announce + audience? monitoring scope? quiet window?).
+- **2026-09-14 (run 21:48)** — ⛔ **Item 20 re-checked: still BLOCKED — but TWO new facts for Dad (not a duplicate).**
+  First unchecked item is again #20. Re-verified the live state before acting: `VERSION`=3.0.0,
+  tag `v3.0.0`, repo `crperdue73/cirrus-portal` public, `dist/` carries tarball+SBOM+`SHA256SUMS`+`.asc`.
+  No decision from Dad, so nothing was announced / published / deployed — the box stays unticked.
+  **NEW (1):** the announcement copy is now **drafted** — `announcements/2026-09-14-cirrus-portal-v3.0.0-blog-draft.md`
+  (written 2026-09-14, deliberately **not** committed into the repo, **not** published). The
+  “public announcement” half of #20 is ready for Dad to approve + hand to a writer.
+  **NEW (2) — needs Dad, security/hygiene:** *this plan file is tracked in the now-public repo and is
+  publicly readable* (`raw.githubusercontent.com/crperdue73/cirrus-portal/main/plan-public-readiness.md`
+  → HTTP 200). It names the live legacy shared credential `perdue-portal-2026` and internal live-box
+  state (`admin`/`admin`, bind `0.0.0.0`, `tlsMode:off`) — i.e. the internal plan shipped with the
+  public release (it is *not* in the release tarball, only in the git repo). Scrubbing it needs a
+  **history rewrite + force-push to the public remote**, which is a public action I will not take
+  unilaterally. (Note: the “no remote / local commits only” assumption in the cron briefs is stale —
+  a public `origin` now exists and item 20 pushed through it.)
+  **Dad’s decisions needed:** (a) approve the announcement (or skip); (b) scope post-release
+  monitoring + issue triage; (c) name the live-box migration quiet window; (d) say how to remove the
+  plan doc from the public repo (history rewrite vs. leave/unpublish). Nothing ticked, nothing pushed.
