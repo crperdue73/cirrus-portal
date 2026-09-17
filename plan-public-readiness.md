@@ -677,3 +677,13 @@ exact decisions needed (announce + audience? monitoring scope? quiet window?).
   publish — its stated venue is the company blog, next step = Dad → writer. **Item 20 remains OPEN**:
   post-release monitoring/triage (Dad: hands-off) and the live-box migration (Dad: weekend) are still
   gated. Nothing was force-pushed; no other public change made.
+- **2026-09-17 (run 10:18)** — ⛔ **Item 20 re-checked: still BLOCKED; no Dad decision; box stays unticked — standing block, NO new facts.** Re-verified before
+  acting: `VERSION`=3.0.0, tag `v3.0.0`, repo `crperdue73/cirrus-portal` public, `origin/main` frozen at `b4f578b`
+  (local `main` ahead 11 — the re-check notes only), `raw.githubusercontent.com/.../plan-public-readiness.md` → **HTTP 200**
+  (still leaking the legacy literal ×9, alongside the `CHANGELOG.md` prose leak ×1). The announce step is done (2026-09-16); a
+  *finalized* blog post now sits unpublished at `announcements/2026-09-16-cirrus-portal-v3.0.0-blog-post.md` (venue = company
+  blog, still not mine to publish). No new instruction from Dad (heartbeat log = heartbeats only; `proactivity/session-state.md`
+  unchanged since 2026-08-30; chat/DMs show nothing addressed to me). **No public action taken** (nothing announced/published/
+  deployed/pushed/force-pushed/re-cut/rotated). Standing decisions (a)–(e) unchanged — see the **2026-09-15 12:13** note.
+  *Notes: (1) future re-check entries deliberately do NOT spell the legacy literal — each mention adds a leak; (2) still awaiting
+  Dad on the URGENT scrub + live-credential rotation and on the live-box migration window.*
