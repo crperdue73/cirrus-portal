@@ -687,3 +687,10 @@ exact decisions needed (announce + audience? monitoring scope? quiet window?).
   deployed/pushed/force-pushed/re-cut/rotated). Standing decisions (a)–(e) unchanged — see the **2026-09-15 12:13** note.
   *Notes: (1) future re-check entries deliberately do NOT spell the legacy literal — each mention adds a leak; (2) still awaiting
   Dad on the URGENT scrub + live-credential rotation and on the live-box migration window.*
+- **2026-09-17 (run 12:18)** — ⛔ **Item 20 re-checked: still BLOCKED; no Dad decision; box stays unticked — standing block, NO new facts.**
+  Re-verified before acting: `VERSION`=3.0.0, tag `v3.0.0`, repo `crperdue73/cirrus-portal` public, `origin/main` frozen at `b4f578b`
+  (local `main` ahead 12 — the re-check notes only), the plan doc still reachable at `raw.githubusercontent.com` → **HTTP 200**, and the
+  live box still the legacy `agent-portal` container (up 6 days). No new instruction from Dad (heartbeat log = heartbeats only;
+  `proactivity/session-state.md` still 2026-08-30; chat/DMs show nothing addressed to me). **No public action taken** (nothing announced/
+  published/deployed/pushed/force-pushed/re-cut/rotated). Per the standing block I am **not** re-repeating the decision list — see the
+  **2026-09-15 12:13** note for standing decisions (a)–(e).
