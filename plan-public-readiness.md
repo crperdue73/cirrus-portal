@@ -716,3 +716,11 @@ exact decisions needed (announce + audience? monitoring scope? quiet window?).
   `proactivity/session-state.md` unchanged since 2026-08-30; chat/DMs show nothing addressed to me). **No public action taken** (nothing
   announced/published/deployed/pushed/force-pushed/re-cut/rotated). Per the standing block I am **not** re-repeating the decision list —
   see the **2026-09-15 12:13** note for standing decisions (a)–(e).
+- **2026-09-19 (run 02:19)** — ⛔ **Item 20 re-checked: still BLOCKED; no Dad decision; box stays unticked — standing block, NO new facts.**
+  Re-verified before acting: `VERSION`=3.0.0, tag `v3.0.0`, repo `crperdue73/cirrus-portal` public, `origin/main` frozen at `b4f578b`
+  (local `main` ahead 16 — the re-check notes only), `raw.githubusercontent.com/.../plan-public-readiness.md` → **HTTP 200** (still leaking the
+  legacy literal ×9, alongside the `CHANGELOG.md` prose leak ×1), the public repo still tracks **no** live state, and the live box still the legacy
+  `agent-portal` container (up 8 days). No new instruction from Dad (heartbeat log = heartbeats only; `proactivity/session-state.md` unchanged
+  since 2026-08-30; chat/DMs show nothing addressed to me; the v3.0.0 announcement already went out 2026-09-16). **No public action taken**
+  (nothing announced/published/deployed/pushed/force-pushed/re-cut/rotated). Per the standing block I am **not** re-repeating the decision list —
+  see the **2026-09-15 12:13** note for standing decisions (a)–(e).
