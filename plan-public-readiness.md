@@ -749,3 +749,13 @@ exact decisions needed (announce + audience? monitoring scope? quiet window?).
   window — but the migration is Dad-owned and no explicit go/no-go has arrived. **No public action taken** (nothing announced/published/deployed/pushed/
   re-cut/rotated). Not re-repeating the decision list — see the **2026-09-15 12:13** note. **Go/no-go needed:** Dad's explicit OK + a quiet window for the
   live-box migration (rotate admin creds · TLS via `--domain` · container rename `agent-portal`→`cirrus-portal` · chown state to `10001:10001`).
+- **2026-09-20 (run 02:21)** — ⛔ **Item 20 re-checked: still BLOCKED; box stays unticked — FINAL quiet window of the named weekend; no Dad decision; last entry until Dad moves.**
+  Verified before acting: `VERSION`=3.0.0, tag `v3.0.0`, repo `crperdue73/cirrus-portal` public, `origin/main` frozen at `b4f578b`
+  (local `main` ahead 20 — these re-check notes only, unpushed), the plan doc still reachable at `raw.githubusercontent.com` → **HTTP 200**, the public
+  repo tracks **no** live state, and the live box still the legacy `agent-portal` container (up 9 days). No new instruction from Dad (heartbeat log =
+  heartbeats only; `proactivity/session-state.md` records (b) monitoring hands-off, (c) weekend, (d) credential hygiene Dad-handled, (e) doc-scan
+  declined; chat/DMs show nothing addressed to me). **NEW / decision-value:** it is now **Sunday 2026-09-20, 02:21 ET — the last quiet morning inside the
+  weekend window Dad named** for the live-box migration; the window closes when the household wakes. **No public action taken** (nothing announced/
+  published/deployed/pushed/force-pushed/re-cut/rotated). Per the standing block this is the **final re-check entry — no further entries will be added
+  until Dad decides.** Standing decisions (a)–(e) unchanged; see the **2026-09-15 12:13** note. **Go/no-go needed:** Dad's explicit OK + timing for the
+  live-box migration (rotate admin creds · TLS via `--domain` · container rename `agent-portal`→`cirrus-portal` · chown state to `10001:10001`).
