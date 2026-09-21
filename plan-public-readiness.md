@@ -759,3 +759,16 @@ exact decisions needed (announce + audience? monitoring scope? quiet window?).
   published/deployed/pushed/force-pushed/re-cut/rotated). Per the standing block this is the **final re-check entry — no further entries will be added
   until Dad decides.** Standing decisions (a)–(e) unchanged; see the **2026-09-15 12:13** note. **Go/no-go needed:** Dad's explicit OK + timing for the
   live-box migration (rotate admin creds · TLS via `--domain` · container rename `agent-portal`→`cirrus-portal` · chown state to `10001:10001`).
+
+- **2026-09-21 (run 16:24)** — ⛔ **BLOCKED: Item 20 (Public release) — the named weekend window has LAPSED; box stays unticked.**
+  This is a *window-lapse* update, not a repeated re-check. Re-verified the live state before acting: `VERSION`=3.0.0,
+  tag `v3.0.0`, repo `crperdue73/cirrus-portal` public, `origin/main` frozen at `b4f578b` (local `main` ahead 21 — these
+  re-check notes only, **unpushed**), the plan doc still reachable at `raw.githubusercontent.com` → **HTTP 200**, the
+  public repo tracks **no** live state, and the live box is still the legacy `agent-portal` container (**up 10 days**).
+  No new instruction from Dad (heartbeat log = heartbeats only; `proactivity/session-state.md` unchanged since 2026-08-30;
+  chat/DMs show nothing addressed to me; the v3.0.0 announcement already went out 2026-09-16). **NEW:** the **“weekend”
+  window Dad named for the live-box migration has passed** — it is now **Monday 2026-09-21, 16:24 ET** and no go/no-go
+  arrived during the window, so the migration now needs a **fresh quiet window + Dad’s explicit OK**. **No public action
+  taken** (nothing announced/published/deployed/pushed/force-pushed/re-cut/rotated). Standing decisions (a)–(e) unchanged;
+  see the **2026-09-15 12:13** note. **Decision needed from Dad:** an explicit go/no-go **and a new quiet window** for the
+  live-box migration, plus the still-open scrub/rotation decision (see 2026-09-15 12:13). No further entries until Dad decides.
