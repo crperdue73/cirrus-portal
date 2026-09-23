@@ -772,3 +772,14 @@ exact decisions needed (announce + audience? monitoring scope? quiet window?).
   taken** (nothing announced/published/deployed/pushed/force-pushed/re-cut/rotated). Standing decisions (a)–(e) unchanged;
   see the **2026-09-15 12:13** note. **Decision needed from Dad:** an explicit go/no-go **and a new quiet window** for the
   live-box migration, plus the still-open scrub/rotation decision (see 2026-09-15 12:13). No further entries until Dad decides.
+
+- **2026-09-22 (run 20:26)** — ⛔ **Item 20 re-checked: still BLOCKED; box stays unticked — ONE new verified fact (live box restarted today, not migrated).**
+  Verified before acting: `VERSION`=3.0.0, tag `v3.0.0`, repo `crperdue73/cirrus-portal` public, `origin/main` frozen at `b4f578b`
+  (local `main` ahead 22 — these re-check notes only, **unpushed**), the plan doc still reachable at `raw.githubusercontent.com` → **HTTP 200**,
+  and the public repo still tracks **no** live state. **NEW:** the live `agent-portal` container was (re)started today **~18:44 ET** (it had been
+  up 10 days), yet the on-disk state is **unchanged legacy 2.x** — old image, wildcard bind with cleartext TLS off, the legacy shared password +
+  plaintext gateway tokens still in `portal-config.json`, and **no** `portal-secrets.json` — i.e. a routine restart, **not** the migration.
+  No new instruction from Dad (heartbeat log = heartbeats only; `proactivity/session-state.md` unchanged since 2026-08-30; chat/DMs show nothing
+  addressed to me). **No public action taken** (nothing announced/published/deployed/pushed/force-pushed/re-cut/rotated). Standing decisions
+  (a)–(e) unchanged — see the **2026-09-15 12:13** note. **Decision needed from Dad:** an explicit go/no-go **and a fresh quiet window** for the
+  live-box migration, plus the still-open scrub/rotation decision.
