@@ -783,3 +783,13 @@ exact decisions needed (announce + audience? monitoring scope? quiet window?).
   addressed to me). **No public action taken** (nothing announced/published/deployed/pushed/force-pushed/re-cut/rotated). Standing decisions
   (a)–(e) unchanged — see the **2026-09-15 12:13** note. **Decision needed from Dad:** an explicit go/no-go **and a fresh quiet window** for the
   live-box migration, plus the still-open scrub/rotation decision.
+
+- **2026-09-24 (run 10:33)** — ⛔ **BLOCKED (standing): Item 20 — still gated on Dad; box stays unticked; NO new facts.**
+  Re-verified before acting: `VERSION`=3.0.0, tag `v3.0.0`, repo `crperdue73/cirrus-portal` public, `origin/main` frozen at `b4f578b`
+  (local `main` ahead 23 — these re-check notes only, **unpushed**), the plan doc still reachable at `raw.githubusercontent.com` → **HTTP 200**,
+  the public repo tracks **no** live state, and the live box is still the legacy `agent-portal` container (up 40 h).
+  No new instruction from Dad (heartbeat log = heartbeats only; `proactivity/session-state.md` unchanged; chat/DMs show nothing addressed to me;
+  the v3.0.0 announcement already went out 2026-09-16). **No public action taken** (nothing announced/published/deployed/pushed/re-cut/rotated).
+  Standing decisions (a)–(e) unchanged — see the **2026-09-15 12:13** note.
+  **RECOMMENDATION (new):** every remaining item-20 sub-task is Dad-owned, so this 2-hour cron now produces only duplicate blocked notes —
+  suggest **pausing it** (or narrowing it to a daily Dad-decision check) until Dad rules.
