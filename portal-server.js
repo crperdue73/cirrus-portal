@@ -725,7 +725,11 @@ class GatewayClient {
     this.ws.send(JSON.stringify({
       type: 'req', id: 'c1', method: 'connect',
       params: {
-        minProtocol: 3, maxProtocol: 3,
+        // Protocol negotiation: 3 = legacy gateways (home/lab, 2026.5.5),
+        // 4 = newer gateways (ct-test, 2026.9.2 requires minProtocol 4).
+        // Range lets one client serve both; previously pinned to 3, which made
+        // any >=4 gateway unconnectable. Kept in sync with the live hotfix.
+        minProtocol: 3, maxProtocol: 4,
         client,
         role: 'operator', scopes,
         caps: [], commands: [], permissions: {},
