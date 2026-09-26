@@ -353,7 +353,7 @@ function assertTlsPolicy() {
 //   3. legacy portal-config.json gateway.token  (migrated on boot, then stripped)
 //   4. env  GATEWAY_TOKEN               (single-gateway / one-liner deploys)
 function readSecrets() {
-  const out = { gatewayTokens: {}, portalPassword: '' };
+  const out = { gatewayTokens: {}, portalPassword: '', agentTokens: {} };
   try {
     const raw = JSON.parse(fs.readFileSync(SECRETS_PATH, 'utf8'));
     if (raw && typeof raw.gatewayTokens === 'object' && raw.gatewayTokens) {
@@ -362,6 +362,23 @@ function readSecrets() {
       }
     }
     if (typeof raw.portalPassword === 'string') out.portalPassword = raw.portalPassword;
+    // Agent API tokens (plan item 1a): hashed credential records keyed by id.
+    if (raw && raw.agentTokens && typeof raw.agentTokens === 'object') {
+      for (const [k, v] of Object.entries(raw.agentTokens)) {
+        if (!v || typeof v !== 'object' || !v.hash || !v.salt) continue;
+        out.agentTokens[k] = {
+          id: String(v.id || k),
+          agentId: String(v.agentId || ''),
+          gatewayId: String(v.gatewayId || ''),
+          label: String(v.label || '').slice(0, 60),
+          createdAt: Number(v.createdAt) || null,
+          rotatedAt: Number(v.rotatedAt) || null,
+          salt: String(v.salt),
+          hash: String(v.hash),
+          lookup: String(v.lookup || ''),
+        };
+      }
+    }
   } catch (e) {
     if (e && e.code !== 'ENOENT') console.warn('[portal] could not read portal-secrets.json:', e.message);
   }
@@ -395,6 +412,132 @@ function writeSecrets() {
   } catch (e) {
     console.error('[portal] failed to write portal-secrets.json:', e.message);
   }
+}
+
+// ── Agent API tokens (plan item 1a) ─────────────────────────────────────────
+// Agents are non-browser callers, so they authenticate with a Bearer token
+// instead of a session cookie. Tokens live in portal-secrets.json → agentTokens
+// (0600) and are stored HASHED — the raw secret is shown exactly once, at mint
+// time, and is never persisted or re-readable. Each record:
+//   { id, agentId, gatewayId, label, createdAt, salt, hash, lookup }
+//   • id        — public handle the admin UI/API uses to list/rotate/revoke
+//   • hash+salt — scrypt(secret) — the authoritative check (same as passwords)
+//   • lookup    — sha256(secret), a one-way index so a request resolves to one
+//                 candidate without scrypt-ing every stored token
+//   • agentId/gatewayId/label/createdAt are the only fields the API ever returns.
+// Mint/revoke/rotate are exposed to admins via /api/agent-tokens; the Bearer
+// check that consumes these records lands with item 1b.
+const AGENT_TOKEN_PREFIX = 'cpat_';
+const AGENT_TOKEN_RE = /^[a-zA-Z0-9._*-]{1,64}$/;
+
+function agentTokenLookup(secret) {
+  return crypto.createHash('sha256').update(String(secret)).digest('hex');
+}
+function agentTokenHash(secret, salt) {
+  return crypto.scryptSync(String(secret), salt, 64).toString('hex');
+}
+function newAgentTokenSecret() { return AGENT_TOKEN_PREFIX + crypto.randomBytes(32).toString('base64url'); }
+function newAgentTokenId() { return 'at_' + crypto.randomBytes(8).toString('hex'); }
+
+function agentTokenStore() {
+  if (!SECRETS.agentTokens || typeof SECRETS.agentTokens !== 'object') SECRETS.agentTokens = {};
+  return SECRETS.agentTokens;
+}
+
+// Identity fields only — never the salt/hash/lookup, never the secret.
+function publicAgentToken(rec) {
+  return {
+    id: rec.id,
+    agentId: rec.agentId,
+    gatewayId: rec.gatewayId || '',
+    label: rec.label || '',
+    createdAt: rec.createdAt || null,
+    rotatedAt: rec.rotatedAt || null,
+  };
+}
+
+function validateAgentTokenFields(agentId, gatewayId) {
+  const a = String(agentId == null ? '' : agentId).trim();
+  if (!a) return 'agentId is required';
+  if (!AGENT_TOKEN_RE.test(a)) return 'agentId: 1-64 chars, letters/numbers/._*-';
+  const g = String(gatewayId == null ? '' : gatewayId).trim();
+  if (g && !AGENT_TOKEN_RE.test(g)) return 'gatewayId: 1-64 chars, letters/numbers/._*-';
+  return null;
+}
+
+// Mint a token for one agent (optionally scoped to one gateway). Returns the
+// plaintext secret exactly once plus the public record.
+function mintAgentToken(fields = {}) {
+  const err = validateAgentTokenFields(fields.agentId, fields.gatewayId);
+  if (err) return { error: err };
+  const secret = newAgentTokenSecret();
+  const salt = crypto.randomBytes(16).toString('hex');
+  const id = newAgentTokenId();
+  const rec = {
+    id,
+    agentId: String(fields.agentId).trim(),
+    gatewayId: String(fields.gatewayId || '').trim(),
+    label: String(fields.label || '').slice(0, 60),
+    createdAt: Date.now(),
+    salt,
+    hash: agentTokenHash(secret, salt),
+    lookup: agentTokenLookup(secret),
+  };
+  agentTokenStore()[id] = rec;
+  writeSecrets();
+  return { token: secret, record: publicAgentToken(rec) };
+}
+
+function getAgentToken(id) {
+  return agentTokenStore()[String(id)] || null;
+}
+
+// Rotate: same identity, brand-new secret. The old secret stops working the
+// instant this returns (the hash/lookup are replaced in place).
+function rotateAgentToken(id) {
+  const rec = getAgentToken(id);
+  if (!rec) return { error: 'no such agent token' };
+  const secret = newAgentTokenSecret();
+  const salt = crypto.randomBytes(16).toString('hex');
+  rec.salt = salt;
+  rec.hash = agentTokenHash(secret, salt);
+  rec.lookup = agentTokenLookup(secret);
+  rec.rotatedAt = Date.now();
+  writeSecrets();
+  return { token: secret, record: publicAgentToken(rec) };
+}
+
+function revokeAgentToken(id) {
+  const store = agentTokenStore();
+  const key = String(id);
+  if (!store[key]) return { error: 'no such agent token' };
+  const rec = store[key];
+  delete store[key];
+  writeSecrets();
+  return { record: publicAgentToken(rec) };
+}
+
+function listAgentTokens() {
+  return Object.values(agentTokenStore())
+    .map(publicAgentToken)
+    .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+}
+
+// Resolve a presented Bearer secret to its record (or null). Bounded work: one
+// sha256, a timing-safe compare per stored token, then a single scrypt verify
+// on the match — never scrypt over the whole store.
+function verifyAgentToken(secret) {
+  if (typeof secret !== 'string' || !secret) return null;
+  const lookup = agentTokenLookup(secret);
+  for (const rec of Object.values(agentTokenStore())) {
+    if (!rec || !rec.lookup || rec.lookup.length !== lookup.length) continue;
+    if (!timingSafeEq(rec.lookup, lookup)) continue;
+    if (!rec.salt || !rec.hash) return null;
+    const got = Buffer.from(agentTokenHash(secret, rec.salt), 'hex');
+    const want = Buffer.from(rec.hash, 'hex');
+    return (got.length === want.length && crypto.timingSafeEqual(got, want)) ? rec : null;
+  }
+  return null;
 }
 
 // env var name for a gateway id, e.g. "lab" -> PORTAL_GATEWAY_TOKEN_LAB
@@ -3075,6 +3218,45 @@ async function handleApi(req, res, url) {
     const removed = pruneAudit();
     audit('audit_prune', user.username, user.role, { removed });
     return json(res, 200, { ok: true, removed, retention: { days: auditRetentionDays(), maxBytes: auditMaxBytes() } });
+  }
+
+  // ── Agent API tokens (plan item 1a) ─────────────────────────────────
+  // Admin-managed Bearer tokens for non-browser agent callers. The secret is
+  // returned exactly once (mint/rotate) and never again; only the identity
+  // fields are ever listed. Every change is audited. The Bearer check that
+  // consumes these lands with item 1b.
+  if (p === '/api/agent-tokens' && req.method === 'GET') {
+    if (!requireRole(user, 'admin')) return json(res, 403, { error: 'admins only' });
+    return json(res, 200, { agentTokens: listAgentTokens() });
+  }
+
+  if (p === '/api/agent-tokens' && req.method === 'POST') {
+    if (!requireRole(user, 'admin')) return json(res, 403, { error: 'admins only' });
+    const body = await readBody(req);
+    if (!body) return json(res, 400, { error: 'bad body' });
+    const r = mintAgentToken(body);
+    if (r.error) return json(res, 400, { error: r.error });
+    audit('agent_token_mint', user.username, user.role, { id: r.record.id, agentId: r.record.agentId, gatewayId: r.record.gatewayId });
+    // `token` is the plaintext secret — shown once, never stored in the clear.
+    return json(res, 200, { ok: true, token: r.token, agentToken: r.record });
+  }
+
+  if (/^\/api\/agent-tokens\/[^/]+\/rotate$/.test(p) && req.method === 'POST') {
+    if (!requireRole(user, 'admin')) return json(res, 403, { error: 'admins only' });
+    const id = decodeURIComponent(p.split('/')[3]);
+    const r = rotateAgentToken(id);
+    if (r.error) return json(res, 404, { error: r.error });
+    audit('agent_token_rotate', user.username, user.role, { id, agentId: r.record.agentId, gatewayId: r.record.gatewayId });
+    return json(res, 200, { ok: true, token: r.token, agentToken: r.record });
+  }
+
+  if (/^\/api\/agent-tokens\/[^/]+$/.test(p) && req.method === 'DELETE') {
+    if (!requireRole(user, 'admin')) return json(res, 403, { error: 'admins only' });
+    const id = decodeURIComponent(p.split('/')[3]);
+    const r = revokeAgentToken(id);
+    if (r.error) return json(res, 404, { error: r.error });
+    audit('agent_token_revoke', user.username, user.role, { id, agentId: r.record.agentId, gatewayId: r.record.gatewayId });
+    return json(res, 200, { ok: true });
   }
 
   // ── Gateway management (admin: Gateways view, Aug 2026) ───────────────
