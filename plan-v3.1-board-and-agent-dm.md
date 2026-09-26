@@ -40,7 +40,7 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
 - [x] **2a. Store** — `portal-board.json` (0600, bind-mounted) with retention cap + prune (audit-log pattern). ✅ 2026-09-26 (`5db3d8a`)
 - [x] **2b. API** — `GET /api/board`, `POST /api/board/post`, `GET /api/board/stream` (SSE); identity resolved from session *or* agent token. ✅ 2026-09-26 (`297c24b`)
 - [x] **2c. Access control** — `general` open to all; named boards carry `read`/`post` lists (all | explicit agents/roles), enforced server-side on read **and** write. ✅ 2026-09-26 (`7c8dd69`)
-- [ ] **2d. Board tab UI** — board picker, live transcript, composer (Dad posts as *Robbie · portal*), author/server filter, unread badge.
+- [x] **2d. Board tab UI** — board picker, live transcript, composer (Dad posts as *Robbie · portal*), author/server filter, unread badge. ✅ 2026-09-26 (`f630254`)
 - [ ] **2e. Notify** — unread cursor + heartbeat pull; `@agent` mention-wake (opt-in).
 - [ ] **2f. Tests** — post/read/pagination, per-board ACL, retention, live stream.
 
@@ -167,3 +167,26 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
   guard) · `node --check` · test-board-{store,api} 6/6·7/7 unchanged · `run-tests.sh` all green
   (node:test 24/24) · lint + secret-scan clean. Next: 2d (Board tab UI) — then the Phase-5d early
   preview hand-off.
+- **2026-09-26 05:16** — ✅ **2d done** (`f630254`). Board tab UI in `portal.html`. A new **Board** nav item for
+  every role (the server advertises only ACL-readable boards, so the picker *is* the ACL) with an unread badge;
+  the view is a full-height live transcript — board picker (chips + per-board unread count), a composer that
+  posts through `/api/board/post` (Dad posts as "Robbie · portal"; identity is resolved server-side), author +
+  server filters, and an SSE `/api/board/stream` subscriber that appends posts live (de-duped by id, no optimistic
+  append). Human posts read as the signed-in person (right-aligned); agent posts carry their gateway chip. Unread
+  is a **client-side** cursor per board in `localStorage`, refreshed on render + a 20s badge poll while the tab is
+  open (the server-side unread cursor + heartbeat pull is 2e). Evidence: `test-board-ui.js` 6/6 (static wiring,
+  incl. the exact post fields the bubble reads · inline script compiles · read contract + ACL-free picker · human
+  identity round-trips · live `post` event payload renderable · restricted board absent from picker + 403) ·
+  extracted-inline-script `node --check` · node:test 24/24 · test-board-{store,api,acl} 6/6·7/7·7/7 ·
+  test-agent-api 6/6 · `run-tests.sh` all green · lint + secret-scan clean.
+- **2026-09-26 05:16** — 🎉 **Phase-5d EARLY PREVIEW hand-off** (per the loop's early-hand-off note, fired as soon
+  as 2d landed). Stood up a **separate** preview on the live box: container `portal-preview` (image
+  `portal-agent-portal:latest`, with the **new** `portal-server.js`/`portal.html` from this branch bind-mounted
+  over `/app`), **host net**, **LAN bind `192.168.1.110:18810`**, **TLS on** (self-signed SAN cert), **separate
+  state** `/home/noah/.openclaw/workspace-noah/portal-preview/` (config 0600, runs as uid 10001, `--read-only` +
+  `cap-drop ALL`). **Production `agent-portal` untouched** (still 0.0.0.0:18800). Seeded two posts on `general`;
+  admin display name set to *Robbie* so the board shows "Robbie · portal". Credentials: `admin` + the value in
+  `portal-preview/.preview-admin-password` (kept OUT of the repo — not committed, never printed to logs). URL +
+  creds reported to Dad in the run report. Bind is scoped to the specific LAN IP (not `0.0.0.0`); the ufw
+  fleet-subnet rule stays a migration-window step. **5d is deliberately NOT ticked** (this is a click-now preview;
+  5d is the formal ship step). Loop continues at 2e.
