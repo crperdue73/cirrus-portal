@@ -46,7 +46,7 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
 
 ## Phase 3 — Phone book
 - [x] **3a. `GET /api/agent/roster`** — every agent on every gateway: id, name, emoji, gateway, cross-server ref, reachability status. ✅ 2026-09-26 (`9862450`)
-- [ ] **3b. Tests** — merges gateways, marks offline servers, token-scoped.
+- [x] **3b. Tests** — merges gateways, marks offline servers, token-scoped. ✅ 2026-09-26 (`72fcc60`)
 
 ## Phase 4 — Cross-server agent DM
 - [ ] **4a. Mailbox store** — `portal-agent-dm.json` (0600): id, from, to, text, ts, state, reply, hops, awaitReply.
@@ -256,3 +256,17 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
   (4) `test-setup.js` fixture renamed `robbie`/`Robbie` → `admin`/`Admin`. Verified live: `/api/board?board=general`
   returns both posts as **Admin · portal**. `node --check` · test-board-ui 6/6 · test-setup 3/3. To make a real
   *Robbie* account: admin → Users → create `robbie` with displayName `Robbie` (no code change needed).
+- **2026-09-26 09:16** — ✅ **3b done** (`72fcc60`). Phase-3 acceptance gate: `test-roster-gate.js` (6/6) —
+  the missing regression gate that proves the 3a phone book **together** against the REAL server with live +
+  dying fake gateways (the phase-3 twin of `test-agent-api.js` / `test-board-gate.js`). Drives the integration
+  edges 3a's focused test doesn't: **A** token-scoped access (Bearer required · human cookie inert on
+  `/api/agent/*` · agent token inert on the human `/api/agents`); **B** two-gateway merge, deterministically
+  ordered config-then-name, with the cross-server `ref`/`key` shape; **C** a never-connected gateway listed
+  `connected:false` non-fatally; **D** the **live→down reachability flip** — `ROSTER_CACHE` replays a dropped
+  gateway's last-known agents as `reachable:false` with `lastSeenAt` retained and `agentCount` kept, so the
+  phone book survives a server outage instead of losing it (the edge 3a could not exercise); **E** per-token
+  identity (`you` tracks the calling token) + revocation (401 only that token, sibling untouched); **F** audit
+  (`agent_call` + `agent_roster` counts) with no token in the log or response. Test-only; no `portal-server.js`
+  change. Evidence: `node --check` · `test-roster-gate.js` 6/6 · test-agent-roster 7/7 · node:test **24/24** ·
+  `run-tests.sh` all green · lint + secret-scan clean. **Phase 3 complete** — next is Phase 4 (cross-server
+  agent DM, 4a).
