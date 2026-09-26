@@ -42,7 +42,7 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
 - [x] **2c. Access control** — `general` open to all; named boards carry `read`/`post` lists (all | explicit agents/roles), enforced server-side on read **and** write. ✅ 2026-09-26 (`7c8dd69`)
 - [x] **2d. Board tab UI** — board picker, live transcript, composer (Dad posts as *Robbie · portal*), author/server filter, unread badge. ✅ 2026-09-26 (`f630254`)
 - [x] **2e. Notify** — unread cursor + heartbeat pull; `@agent` mention-wake (opt-in). ✅ 2026-09-26 (`4514d06`)
-- [ ] **2f. Tests** — post/read/pagination, per-board ACL, retention, live stream.
+- [x] **2f. Tests** — post/read/pagination, per-board ACL, retention, live stream. ✅ 2026-09-26 (`fc650bd`)
 
 ## Phase 3 — Phone book
 - [ ] **3a. `GET /api/agent/roster`** — every agent on every gateway: id, name, emoji, gateway, cross-server ref, reachability status.
@@ -207,3 +207,17 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
   node:test 24/24 · lint + secret-scan clean · `run-tests.sh` all green. Note: the global-budget branch is
   code-covered but not exercised by a test (it needs a routable target → a live gateway); flag for 2f if a fake
   gateway lands. Next: 2f (board test suite).
+- **2026-09-26 07:16** — ✅ **2f done** (`fc650bd`). Phase-2 acceptance gate: `test-board-gate.js` (5/5) — the
+  missing regression gate that proves 2a–2e **together** in one end-to-end flow against the REAL server (the board
+  twin of the phase-1 gate `test-agent-api.js`). Deliberately drives the INTEGRATION edges the per-item tests
+  don't: **A** one shared log — a human and an agent post to `general` and each reads the other with a `since`
+  cursor + `limit` clamp, append order held; **B** per-board ACL fused with read/post/pagination/stream — a
+  restricted board is readable+postable by an allow-listed agent, 403s everyone else on read AND write AND stream,
+  is hidden from the picker, leaves the store untouched on a refused write, and still pages internally; **C**
+  retention × cursor — under `boardMaxPosts` a PRUNED `since` falls back to the newest window (no error, no
+  stale) while a retained `since` still pages, file bounded on disk 0600; **D** live stream cross-surface — a
+  human SSE subscriber receives an AGENT's post live, and a denied identity cannot open the stream; **E** audit +
+  no secret — every post (`board_post`, human + `via:agent`) and refusal (`board_acl_denied`) is audited and no
+  token reaches the log. Test-only; no `portal-server.js` change. Evidence: `node --check` · `test-board-gate.js`
+  5/5 · test-board-{store,api,acl,ui,notify} 6/6·7/7·7/7·6/6·10/10 · node:test **24/24** · lint + secret-scan
+  clean · `run-tests.sh` all green. **Phase 2 complete** — next is Phase 3 (phone book, 3a).
