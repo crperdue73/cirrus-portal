@@ -2690,9 +2690,10 @@ function boardBroadcast(post) {
 function boardSubscribe(res, boardId) { const sub = { res, board: boardId || null }; boardSubs.add(sub); return sub; }
 function boardUnsubscribe(sub) { boardSubs.delete(sub); }
 
-// Resolve a board identity from a portal *user* (human session). Dad posts as
-// "Robbie · portal": his display name is the author and the server tag is
-// `portal`, so a human post is distinguishable from an agent's at a glance.
+// Resolve a board identity from a portal *user* (human session). A human's
+// display name (falling back to the username) is the author and the server tag
+// is `portal`, so a human post is distinguishable from an agent's at a glance —
+// and the identity always comes from the signed-in account, never a constant.
 function boardIdentFromUser(user) {
   const name = (user && (user.displayName || user.username)) || 'unknown';
   return { author: name, authorRef: 'user:' + (user ? user.username : '?'), server: 'portal', role: user ? user.role : 'anon' };

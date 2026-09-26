@@ -111,7 +111,7 @@ const readJson = (p) => JSON.parse(fs.readFileSync(p, 'utf8'));
 
       const weak = await fetch(base + '/api/setup', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: 'robbie', password: 'admin', passwordConfirm: 'admin' }),
+        body: JSON.stringify({ username: 'admin', password: 'admin', passwordConfirm: 'admin' }),
       });
       assert(weak.status === 400, `B: weak password should be 400 (got ${weak.status})`);
       assert(!fs.existsSync(path.join(d, 'portal-users.json')), 'B: no user file should exist after a rejected setup');
@@ -119,7 +119,7 @@ const readJson = (p) => JSON.parse(fs.readFileSync(p, 'utf8'));
       const ok = await fetch(base + '/api/setup', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          username: 'robbie', displayName: 'Robbie', password: GOOD, passwordConfirm: GOOD,
+          username: 'admin', displayName: 'Admin', password: GOOD, passwordConfirm: GOOD,
           bind: '127.0.0.1', port: 0 + JSON.parse(fs.readFileSync(path.join(d, 'portal-config.json'), 'utf8')).port,
           tlsMode: 'auto',
           gateway: { id: 'home', url: 'ws://127.0.0.1:9', name: 'Home', token: 'setup-gw-token-0123456789abcdef' },
@@ -133,7 +133,7 @@ const readJson = (p) => JSON.parse(fs.readFileSync(p, 'utf8'));
       // Users file now has the admin, hashed (never plaintext).
       const users = readJson(path.join(d, 'portal-users.json')).users;
       const admin = users.find((u) => u.role === 'admin');
-      assert(admin && admin.username === 'robbie', 'C: admin account not written');
+      assert(admin && admin.username === 'admin', 'C: admin account not written');
       assert(!JSON.stringify(users).includes(GOOD), 'C: password stored in plaintext!');
 
       // Config records bind/port/tlsMode and stays token/password-free.
@@ -145,10 +145,10 @@ const readJson = (p) => JSON.parse(fs.readFileSync(p, 'utf8'));
 
       // The setup session actually works, and login with the new password works.
       const me = await (await fetch(base + '/api/me', { headers: { Cookie: cookie } })).json();
-      assert(me.authed === true && me.user.username === 'robbie', 'C: setup session not authenticated');
+      assert(me.authed === true && me.user.username === 'admin', 'C: setup session not authenticated');
       const login = await fetch(base + '/api/login', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: 'robbie', password: GOOD }),
+        body: JSON.stringify({ username: 'admin', password: GOOD }),
       });
       assert(login.ok, `C: login with the new admin password failed (${login.status})`);
 

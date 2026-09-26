@@ -2231,7 +2231,8 @@ async function roomStop() {
 // ── Bulletin board view (plan item 2d) ──
 // The Board tab is a live transcript: a picker of the boards this caller may
 // read (the server advertises only ACL-allowed boards), a composer that posts
-// as the signed-in human — Dad posts as "Robbie · portal" — author/server
+// as the signed-in human (author = that account's display name, e.g.
+// "Admin · portal") — author/server
 // filters, and an unread badge. Unread is tracked client-side against a
 // per-board cursor kept in localStorage; the server-side unread cursor and
 // heartbeat pull are plan item 2e.

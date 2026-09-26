@@ -40,7 +40,7 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
 - [x] **2a. Store** — `portal-board.json` (0600, bind-mounted) with retention cap + prune (audit-log pattern). ✅ 2026-09-26 (`5db3d8a`)
 - [x] **2b. API** — `GET /api/board`, `POST /api/board/post`, `GET /api/board/stream` (SSE); identity resolved from session *or* agent token. ✅ 2026-09-26 (`297c24b`)
 - [x] **2c. Access control** — `general` open to all; named boards carry `read`/`post` lists (all | explicit agents/roles), enforced server-side on read **and** write. ✅ 2026-09-26 (`7c8dd69`)
-- [x] **2d. Board tab UI** — board picker, live transcript, composer (Dad posts as *Robbie · portal*), author/server filter, unread badge. ✅ 2026-09-26 (`f630254`)
+- [x] **2d. Board tab UI** — board picker, live transcript, composer (posts as the signed-in account, e.g. *Admin · portal*), author/server filter, unread badge. ✅ 2026-09-26 (`f630254`)
 - [x] **2e. Notify** — unread cursor + heartbeat pull; `@agent` mention-wake (opt-in). ✅ 2026-09-26 (`4514d06`)
 - [x] **2f. Tests** — post/read/pagination, per-board ACL, retention, live stream. ✅ 2026-09-26 (`fc650bd`)
 
@@ -170,7 +170,7 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
 - **2026-09-26 05:16** — ✅ **2d done** (`f630254`). Board tab UI in `portal.html`. A new **Board** nav item for
   every role (the server advertises only ACL-readable boards, so the picker *is* the ACL) with an unread badge;
   the view is a full-height live transcript — board picker (chips + per-board unread count), a composer that
-  posts through `/api/board/post` (Dad posts as "Robbie · portal"; identity is resolved server-side), author +
+  posts through `/api/board/post` (a human posts as their account's display name; identity is resolved server-side), author +
   server filters, and an SSE `/api/board/stream` subscriber that appends posts live (de-duped by id, no optimistic
   append). Human posts read as the signed-in person (right-aligned); agent posts carry their gateway chip. Unread
   is a **client-side** cursor per board in `localStorage`, refreshed on render + a 20s badge poll while the tab is
@@ -246,3 +246,13 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
   `ss` shows `0.0.0.0:18810`, both `https://192.168.1.110:18810` and `https://192.168.1.188:18810` return **200**.
   **Lesson for the next preview/hand-off:** standing up a listener is not the same as making it *reachable* —
   check the host firewall and the bind address BEFORE handing Dad a URL. (Production `agent-portal` untouched.)
+- **2026-09-26 09:05** — 🩹 **Board composer identity de-hardcoded.** Dad: the composer landed as
+  *Robbie · portal*; it must land as the **signed-in user**, and nothing public may have "Robbie" baked in.
+  The resolution logic was already correct (`boardIdentFromUser` = `user.displayName || user.username`); the
+  *seeded preview account* was the culprit — the setup set the admin's `displayName` to `Robbie`. Fixes:
+  (1) preview `portal-users.json` → `displayName:"Admin"`; (2) rewrote the two demo posts' stored `author`
+  (they persist at post time) → `Admin · portal`; (3) scrubbed the two code comments in `portal-server.js` /
+  `portal.html` that documented the "Robbie · portal" assumption → generic signed-in-account wording;
+  (4) `test-setup.js` fixture renamed `robbie`/`Robbie` → `admin`/`Admin`. Verified live: `/api/board?board=general`
+  returns both posts as **Admin · portal**. `node --check` · test-board-ui 6/6 · test-setup 3/3. To make a real
+  *Robbie* account: admin → Users → create `robbie` with displayName `Robbie` (no code change needed).
