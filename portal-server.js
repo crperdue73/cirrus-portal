@@ -103,6 +103,11 @@ const DEFAULTS = {
   boardRetentionDays: 0,        // posts older than this are pruned (0 = keep forever)
   boardMaxPosts: 2000,          // hard count cap; oldest posts dropped past it
   boardMaxBytes: 2 * 1024 * 1024, // hard size cap; oldest posts trimmed past it
+  // Board notify (plan item 2e) — @agent mention-wake is OPT-IN and off by
+  // default. The v1 notify path is PULL (a per-identity unread cursor an agent
+  // reads on its heartbeat); the wake push stays dark until the operator turns
+  // it on, because it injects a note into a recipient agent's session.
+  boardMentionWake: false,
 };
 
 // ── Credential safety ────────────────────────────────────────────────────────
@@ -273,6 +278,7 @@ function loadConfig() {
   if (process.env.PORTAL_TRUST_PROXY !== undefined) cfg.trustProxy = truthyEnv(process.env.PORTAL_TRUST_PROXY);
   if (process.env.PORTAL_INSECURE_PLAINTEXT !== undefined) cfg.insecurePlaintext = truthyEnv(process.env.PORTAL_INSECURE_PLAINTEXT);
   if (process.env.PORTAL_PUBLIC_BIND !== undefined) cfg.publicBind = truthyEnv(process.env.PORTAL_PUBLIC_BIND);
+  if (process.env.PORTAL_BOARD_MENTION_WAKE !== undefined) cfg.boardMentionWake = truthyEnv(process.env.PORTAL_BOARD_MENTION_WAKE);
   return cfg;
 }
 
@@ -708,6 +714,31 @@ async function handleAgentApi(req, res, url) {
     if (r.error) return json(res, r.status || 400, { error: r.error });
     audit('board_post', rec.agentId, 'agent', { id: r.post.id, board: r.post.board, via: 'agent', token: rec.id });
     return json(res, 200, { ok: true, post: r.post });
+  }
+
+  // Board notify — PULL (plan item 2e). The agent-side heartbeat read: unread
+  // counts + the pending window per readable board, tracked server-side so the
+  // agent need not remember a cursor. Zero push, zero loop risk.
+  if (p === '/api/agent/board/unread' && req.method === 'GET') {
+    const ident = boardIdentFromAgent(rec);
+    const r = boardUnread({ boardId: url.searchParams.get('board'), limit: url.searchParams.get('limit') }, ident);
+    if (r.denied) auditBoardDenied(url.searchParams.get('board'), ident, 'read', 'agent');
+    audit('agent_call', rec.agentId, 'agent', { ...callDetail, status: r.error ? (r.status || 404) : 200 });
+    if (r.error) return json(res, r.status || 404, { error: r.error });
+    return json(res, 200, { ok: true, ...r });
+  }
+
+  // Board notify — advance the cursor after consuming posts (plan item 2e).
+  if (p === '/api/agent/board/ack' && req.method === 'POST') {
+    const body = await readBody(req);
+    if (!body) return json(res, 400, { error: 'bad body' });
+    const ident = boardIdentFromAgent(rec);
+    const r = boardAck({ boardId: body.board, since: body.since }, ident);
+    if (r.denied) auditBoardDenied(body.board, ident, 'read', 'agent');
+    audit('agent_call', rec.agentId, 'agent', { ...callDetail, status: r.error ? (r.status || 400) : 200 });
+    if (r.error) return json(res, r.status || 400, { error: r.error });
+    audit('board_ack', rec.agentId, 'agent', { board: r.board, cursor: r.cursor, changed: !!r.changed, via: 'agent', token: rec.id });
+    return json(res, 200, { ok: true, ...r });
   }
 
   audit('agent_call', rec.agentId, 'agent', { ...callDetail, status: 404 });
@@ -2136,12 +2167,13 @@ function normalizePost(p) {
     text,
     tags: Array.isArray(p.tags) ? p.tags.map(t => String(t).slice(0, 40)).filter(Boolean).slice(0, 12) : [],
     replyTo: p.replyTo ? String(p.replyTo).slice(0, 64) : null,
+    mentions: Array.isArray(p.mentions) ? p.mentions.map(m => String(m).slice(0, 64).toLowerCase()).filter(Boolean).slice(0, 12) : [],
     ts: Number(p.ts) || Date.now(),
   };
 }
 
 function loadBoardStore() {
-  const store = { boards: [{ ...BOARD_DEFAULT }], posts: [] };
+  const store = { boards: [{ ...BOARD_DEFAULT }], posts: [], cursors: {} };
   try {
     const raw = JSON.parse(fs.readFileSync(BOARD_PATH, 'utf8'));
     if (raw && Array.isArray(raw.boards)) {
@@ -2155,6 +2187,20 @@ function loadBoardStore() {
       store.boards = boards;
     }
     if (raw && Array.isArray(raw.posts)) store.posts = raw.posts.map(normalizePost).filter(Boolean);
+    // Per-identity read cursors (plan item 2e) — normalized + clamped so a
+    // corrupt file can't wedge an oversized key or a non-string cursor in.
+    if (raw && raw.cursors && typeof raw.cursors === 'object') {
+      for (const [ref, boards] of Object.entries(raw.cursors)) {
+        if (!boards || typeof boards !== 'object') continue;
+        const clean = {};
+        for (const [bid, rec] of Object.entries(boards)) {
+          if (rec && typeof rec === 'object' && rec.last) {
+            clean[String(bid).slice(0, 64)] = { last: String(rec.last).slice(0, 64), ts: Number(rec.ts) || 0 };
+          }
+        }
+        if (Object.keys(clean).length) store.cursors[String(ref).slice(0, 200)] = clean;
+      }
+    }
   } catch (e) { /* first run (ENOENT) or a corrupt file — fall back to defaults */ }
   return store;
 }
@@ -2162,7 +2208,8 @@ function loadBoardStore() {
 // Persist the store 0600. Uses the read-only-rootfs-safe writer (plan item 8).
 function saveBoardStore() {
   try {
-    const data = JSON.stringify({ boards: BOARD.boards, posts: BOARD.posts.slice(-boardMaxPosts()) }, null, 2);
+    pruneBoardCursors();
+    const data = JSON.stringify({ boards: BOARD.boards, posts: BOARD.posts.slice(-boardMaxPosts()), cursors: BOARD.cursors }, null, 2);
     writeFileRobust(BOARD_PATH, data, 0o600);
   } catch (e) {
     console.error('[portal] failed to write board file:', e.message);
@@ -2183,6 +2230,7 @@ function pruneBoardStore(now = Date.now()) {
     while (kept.length > BOARD_KEEP_MIN && Buffer.byteLength(JSON.stringify(kept), 'utf8') > maxBytes) kept.shift();
     removed = before - kept.length;
     if (removed > 0) BOARD.posts = kept;
+    pruneBoardCursors();
   } catch (e) { /* board maintenance must never break the portal */ }
   return removed;
 }
@@ -2229,6 +2277,222 @@ function boardLimit(n) {
   const v = Number(n);
   if (!Number.isFinite(v) || v <= 0) return BOARD_DEFAULT_LIMIT;
   return Math.min(BOARD_MAX_LIMIT, Math.floor(v));
+}
+
+// ── Board notify (plan item 2e) ─────────────────────────────────────────────
+// v1 notify is PULL, not push: the portal keeps a per-identity read cursor per
+// board (the same "since" idea as 2b, but tracked server-side so an agent need
+// not remember it), and an agent checks it on its heartbeat via GET
+// .../board/unread, then fetches the delta through the 2b read endpoint and acks.
+// Nothing is pushed on this path — zero loop risk, zero noise.
+//
+// The ONE push is the optional @mention WAKE below: an opted-in post that names
+// a reachable agent injects a short pointer into that agent's session. It is
+// off by default and bounded (per-post target cap, per-target cooldown, global
+// per-minute budget) so a mention can never become a loop or a wake storm.
+const BOARD_UNREAD_MAX = 20;             // unread posts returned per board (oldest-first)
+const BOARD_CURSOR_MAX_IDENTITIES = 500; // bound on stored cursors (drop least-recent)
+const BOARD_MENTION_MAX_TARGETS = 5;     // wake at most this many agents per post
+const BOARD_MENTION_COOLDOWN_MS = 60_000;// per-target wake cooldown
+const BOARD_WAKE_PER_MINUTE = 30;        // global wake budget (opt-in path only)
+
+function boardMentionWakeEnabled() { return CONFIG.boardMentionWake === true; }
+
+// The cursor key for an identity is the very authorRef the posts carry
+// (agent:<gw>:<id> / user:<name>), so a cursor and its author can never drift.
+function boardCursorKey(ident) { return (ident && ident.authorRef) || null; }
+
+function boardCursorFor(ident) {
+  const key = boardCursorKey(ident);
+  if (!key) return null;
+  if (!BOARD.cursors[key] || typeof BOARD.cursors[key] !== 'object') BOARD.cursors[key] = {};
+  return BOARD.cursors[key];
+}
+
+function boardCursorGet(ident, boardId) {
+  const c = boardCursorFor(ident);
+  const rec = c && c[boardId];
+  return rec && rec.last ? String(rec.last) : null;
+}
+
+// Advance a cursor. Monotonic: it only ever moves FORWARD in board order, so a
+// replayed or stale ack can never re-open posts the caller already consumed.
+// `postId` omitted/null means "mark all read" (advance to the newest post).
+// Returns { changed, cursor } or { error }.
+function boardCursorSet(ident, boardId, postId) {
+  const c = boardCursorFor(ident);
+  if (!c) return { changed: false, cursor: null };
+  const posts = BOARD.posts.filter(p => p.board === boardId);
+  const idx = (id) => posts.findIndex(p => p.id === id);
+  const cur = c[boardId] && c[boardId].last ? String(c[boardId].last) : null;
+  const curIdx = cur ? idx(cur) : -1;
+  let nextIdx, nextId;
+  if (!postId) {
+    nextIdx = posts.length - 1;
+    nextId = nextIdx >= 0 ? posts[nextIdx].id : cur;
+  } else {
+    nextIdx = idx(String(postId));
+    if (nextIdx === -1) return { error: 'unknown cursor' };
+    nextId = String(postId);
+  }
+  if (nextIdx <= curIdx) return { changed: false, cursor: cur }; // already past it
+  c[boardId] = { last: nextId, ts: Date.now() };
+  return { changed: true, cursor: nextId };
+}
+
+// Bound stored cursors: keep the identities most-recently touched.
+function pruneBoardCursors() {
+  let dropped = 0;
+  try {
+    const keys = Object.keys(BOARD.cursors || {});
+    if (keys.length <= BOARD_CURSOR_MAX_IDENTITIES) return 0;
+    const ranked = keys.map((k) => {
+      let ts = 0;
+      for (const rec of Object.values(BOARD.cursors[k] || {})) ts = Math.max(ts, Number(rec && rec.ts) || 0);
+      return { k, ts };
+    }).sort((a, b) => a.ts - b.ts);
+    for (const d of ranked.slice(0, keys.length - BOARD_CURSOR_MAX_IDENTITIES)) { delete BOARD.cursors[d.k]; dropped++; }
+  } catch { /* cursor maintenance must never break the portal */ }
+  return dropped;
+}
+
+function boardUnreadCap(limit) {
+  const v = Number(limit);
+  if (!Number.isFinite(v) || v <= 0) return BOARD_UNREAD_MAX;
+  return Math.min(BOARD_MAX_LIMIT, Math.floor(v));
+}
+
+// Unread for one readable board: the posts this identity has not consumed,
+// oldest-first so a caller consumes them in order and acks forward. Counts are
+// exact; the returned window is capped (more:true says to keep acking).
+function boardUnreadForBoard(board, ident, limit) {
+  const all = BOARD.posts.filter(p => p.board === board.id);
+  const cur = boardCursorGet(ident, board.id);
+  const curIdx = cur ? all.findIndex(p => p.id === cur) : -1;
+  // curIdx === -1 means no cursor, or one whose post was pruned → all unread
+  const pending = all.slice(curIdx + 1);
+  const window = pending.slice(0, boardUnreadCap(limit));
+  return {
+    id: board.id,
+    name: board.name,
+    unread: pending.length,
+    more: pending.length > window.length,
+    cursor: cur,
+    latestId: all.length ? all[all.length - 1].id : null,
+    posts: window,
+  };
+}
+
+// Unread across every board this identity may READ. `boardId` narrows to one
+// (404 unknown, 403 unreadable — the same 2c policy, enforced on read).
+function boardUnread({ boardId, limit } = {}, ident) {
+  if (boardId) {
+    const board = boardById(boardId);
+    if (!board) return { error: 'no such board', status: 404 };
+    if (!boardAclAllows(board, ident, 'read')) return { error: 'forbidden', status: 403, denied: true };
+    const b = boardUnreadForBoard(board, ident, limit);
+    return { board: b, boards: [b], total: b.unread };
+  }
+  const boards = BOARD.boards
+    .filter(b => boardAclAllows(b, ident, 'read'))
+    .map(b => boardUnreadForBoard(b, ident, limit));
+  return { boards, total: boards.reduce((n, b) => n + b.unread, 0) };
+}
+
+// Ack a cursor forward (see boardCursorSet). An unknown post id is refused so a
+// cursor can't be corrupted; an unreadable board is refused like any read.
+function boardAck({ boardId, since } = {}, ident) {
+  const board = boardById(boardId);
+  if (!board) return { error: 'no such board', status: 404 };
+  if (!boardAclAllows(board, ident, 'read')) return { error: 'forbidden', status: 403, denied: true };
+  const r = boardCursorSet(ident, board.id, since || null);
+  if (r.error) return { error: r.error, status: 400 };
+  saveBoardStore();
+  return { board: board.id, cursor: r.cursor, changed: r.changed };
+}
+
+// Parse @mentions: "@agentId" or "@gwId:agentId". Lowercased, de-duped, capped.
+// A board is a public surface, so a mention is metadata, not a secret.
+function parseMentions(text) {
+  const out = [];
+  const seen = new Set();
+  const re = /@([a-z0-9][a-z0-9_-]{0,63}(?::[a-z0-9][a-z0-9_-]{0,63})?)/gi;
+  let m;
+  while ((m = re.exec(String(text || ''))) !== null) {
+    const id = m[1].toLowerCase();
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+    if (out.length >= 12) break;
+  }
+  return out;
+}
+
+// In-memory wake budget + per-target cooldown (bounded; cleared on restart).
+let boardWakeWindow = { count: 0, resetAt: 0 };
+const boardWakeCooldown = new Map(); // target -> last attempt ts
+
+function boardWakeBudget() {
+  const now = Date.now();
+  if (now >= boardWakeWindow.resetAt) boardWakeWindow = { count: 0, resetAt: now + 60_000 };
+  if (boardWakeWindow.count >= BOARD_WAKE_PER_MINUTE) return false;
+  boardWakeWindow.count++;
+  return true;
+}
+
+// Opt-in @mention wake. Fire-and-forget: never blocks a post, never throws.
+// Loop-safe by construction — off by default; each target is woken at most once
+// per cooldown; a post wakes at most BOARD_MENTION_MAX_TARGETS; a global budget
+// caps the whole fleet; and the author is never woken by their own post.
+function boardWakeMentions(post) {
+  if (!boardMentionWakeEnabled()) return;
+  const mentions = Array.isArray(post.mentions) ? post.mentions : [];
+  if (!mentions.length) return;
+  const self = String(post.authorRef || '').split(':').pop();
+  const targets = mentions.filter(m => m !== self && m !== post.author);
+  if (targets.length > BOARD_MENTION_MAX_TARGETS) {
+    audit('board_mention_suppressed', 'system', 'system', {
+      board: post.board, post: post.id, reason: 'per-post cap',
+      mentioned: targets.length, cap: BOARD_MENTION_MAX_TARGETS,
+    });
+  }
+  if (boardWakeCooldown.size > 2000) {
+    const cutoff = Date.now() - BOARD_MENTION_COOLDOWN_MS;
+    for (const [k, ts] of boardWakeCooldown) if (ts < cutoff) boardWakeCooldown.delete(k);
+  }
+  for (const target of targets.slice(0, BOARD_MENTION_MAX_TARGETS)) {
+    const now = Date.now();
+    if (now - (boardWakeCooldown.get(target) || 0) < BOARD_MENTION_COOLDOWN_MS) {
+      audit('board_mention_suppressed', 'system', 'system', { board: post.board, post: post.id, target, reason: 'cooldown' });
+      continue;
+    }
+    boardWakeCooldown.set(target, now); // mark at attempt time so a noisy mention cools down too
+    const t = resolveAgentRef(target);
+    if (!t) {
+      audit('board_mention_unrouted', 'system', 'system', { board: post.board, post: post.id, target });
+      continue;
+    }
+    if (!boardWakeBudget()) {
+      audit('board_mention_suppressed', 'system', 'system', { board: post.board, post: post.id, target, reason: 'budget' });
+      break;
+    }
+    METRICS.boardWakes++;
+    audit('board_mention_wake', 'system', 'system', { board: post.board, post: post.id, target, gw: t.gwId, agent: t.agentId });
+    const note = `[portal board #${post.board}] ${post.author} mentioned you (post ${post.id}). `
+      + `Read it with GET /api/agent/board?board=${post.board}, then ack with POST /api/agent/board/ack.`;
+    try {
+      t.client.request('chat.send', {
+        sessionKey: `agent:${t.agentId}:main`,
+        message: note.slice(0, 2000),
+        deliver: false,
+        idempotencyKey: crypto.randomUUID(),
+      }, 30000).catch((e) => audit('board_mention_wake', 'system', 'system', {
+        board: post.board, post: post.id, target, error: e.message,
+      }));
+    } catch (e) {
+      audit('board_mention_wake', 'system', 'system', { board: post.board, post: post.id, target, error: e.message });
+    }
+  }
 }
 
 // Read posts for one board, oldest→newest. `since` is a post id the caller
@@ -2279,6 +2543,7 @@ function boardPost({ boardId, text, tags, replyTo } = {}, ident) {
     text: body,
     tags,
     replyTo,
+    mentions: parseMentions(body),
     ts: Date.now(),
   });
   if (!post) return { error: 'text required', status: 400 };
@@ -2287,6 +2552,7 @@ function boardPost({ boardId, text, tags, replyTo } = {}, ident) {
   saveBoardStore();
   METRICS.boardPosts++;
   boardBroadcast(post);
+  boardWakeMentions(post);
   return { post };
 }
 
@@ -2928,6 +3194,7 @@ const METRICS = {
   agentRateLimited: 0,
   boardPosts: 0,
   boardAclDenied: 0,
+  boardWakes: 0,
 };
 
 // One structured log line. `logFormat:"json"` (the default) emits a JSON object
@@ -3039,6 +3306,7 @@ function metrics(res, req) {
   metric('cirrus_portal_agent_rate_limited_total', 'counter', 'Agent API requests rejected by the per-token rate limit.', [`cirrus_portal_agent_rate_limited_total ${METRICS.agentRateLimited}`]);
   metric('cirrus_portal_board_posts_total', 'counter', 'Bulletin-board posts appended since start.', [`cirrus_portal_board_posts_total ${METRICS.boardPosts}`]);
   metric('cirrus_portal_board_acl_denied_total', 'counter', 'Bulletin-board reads/writes refused by board access control.', [`cirrus_portal_board_acl_denied_total ${METRICS.boardAclDenied}`]);
+  metric('cirrus_portal_board_wakes_total', 'counter', 'Opt-in @mention wakes delivered to agents since start.', [`cirrus_portal_board_wakes_total ${METRICS.boardWakes}`]);
   metric('cirrus_portal_audit_entries', 'gauge', 'Lines currently in the audit log.', [`cirrus_portal_audit_entries ${auditLineCount()}`]);
   res.writeHead(200, { 'Content-Type': 'text/plain; version=0.0.4; charset=utf-8' });
   res.end(L.join('\n') + '\n');
@@ -3547,6 +3815,27 @@ async function handleApi(req, res, url) {
     if (r.error) return json(res, r.status || 400, { error: r.error });
     audit('board_post', user.username, user.role, { id: r.post.id, board: r.post.board });
     return json(res, 200, { ok: true, post: r.post });
+  }
+
+  // Board notify — human surface (plan item 2e). Same unread/ack core as the
+  // agent surface, so a signed-in person and an agent read one cursor model.
+  if (p === '/api/board/unread' && req.method === 'GET') {
+    const bid = boardIdentFromUser(user);
+    const r = boardUnread({ boardId: url.searchParams.get('board'), limit: url.searchParams.get('limit') }, bid);
+    if (r.denied) auditBoardDenied(url.searchParams.get('board'), bid, 'read', 'human');
+    if (r.error) return json(res, r.status || 404, { error: r.error });
+    return json(res, 200, { ok: true, ...r });
+  }
+
+  if (p === '/api/board/ack' && req.method === 'POST') {
+    const body = await readBody(req);
+    if (!body) return json(res, 400, { error: 'bad body' });
+    const bid = boardIdentFromUser(user);
+    const r = boardAck({ boardId: body.board, since: body.since }, bid);
+    if (r.denied) auditBoardDenied(body.board, bid, 'read', 'human');
+    if (r.error) return json(res, r.status || 400, { error: r.error });
+    audit('board_ack', user.username, user.role, { board: r.board, cursor: r.cursor, changed: !!r.changed });
+    return json(res, 200, { ok: true, ...r });
   }
 
   if (p === '/api/board/stream' && req.method === 'GET') {
