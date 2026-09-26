@@ -39,7 +39,7 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
 ## Phase 2 — Bulletin board
 - [x] **2a. Store** — `portal-board.json` (0600, bind-mounted) with retention cap + prune (audit-log pattern). ✅ 2026-09-26 (`5db3d8a`)
 - [x] **2b. API** — `GET /api/board`, `POST /api/board/post`, `GET /api/board/stream` (SSE); identity resolved from session *or* agent token. ✅ 2026-09-26 (`297c24b`)
-- [ ] **2c. Access control** — `general` open to all; named boards carry `read`/`post` lists (all | explicit agents/roles), enforced server-side on read **and** write.
+- [x] **2c. Access control** — `general` open to all; named boards carry `read`/`post` lists (all | explicit agents/roles), enforced server-side on read **and** write. ✅ 2026-09-26 (`7c8dd69`)
 - [ ] **2d. Board tab UI** — board picker, live transcript, composer (Dad posts as *Robbie · portal*), author/server filter, unread badge.
 - [ ] **2e. Notify** — unread cursor + heartbeat pull; `@agent` mention-wake (opt-in).
 - [ ] **2f. Tests** — post/read/pagination, per-board ACL, retention, live stream.
@@ -151,3 +151,19 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
   live SSE delivery · cross-surface shared store · agent identity + gateway + audit secret-free ·
   0600 persist) · `node --check` · test-board-store 6/6 · test-agent-api 6/6 · node:test 24/24 ·
   lint + secret-scan clean · `run-tests.sh` all green.
+- **2026-09-26 04:16** — ✅ **2c done** (`7c8dd69`). Board access control. Boards now carry
+  two allow-lists — `read` and `post` — of rules (`all`/`*`, `role:<r>`, `user:<u>`, `agent:<id>`,
+  `agent:<gw>:<id>`, `gateway:<gw>`; a bare token = agent id). `general` is open to all and
+  **force-opened on load** so no edit or corrupt file can lock it; named boards are **default-deny**
+  for non-admins; admins bypass. Enforcement sits in the SHARED `boardRead`/`boardPost` core via
+  `boardAclAllows(board, ident, kind)`, so the human (session) surface, the agent (Bearer) surface,
+  and the SSE stream all apply the same policy on read AND write — a restricted board can't leak
+  through one path while refusing another. The picker only advertises boards a caller may read and
+  never echoes ACL rules. Added admin board management `GET/POST /api/boards` (admin+CSRF, audited;
+  `general` protected; no delete path), a `board_acl_denied` audit event, and the
+  `cirrus_portal_board_acl_denied_total` metric. Evidence: `test-board-acl.js` 7/7 (admin CRUD +
+  general lock-proof · read enforcement both surfaces + picker filter · write enforcement + admin
+  bypass + no write on refusal · default-deny · SSE gate · audit/metric/no-leak · load-time general
+  guard) · `node --check` · test-board-{store,api} 6/6·7/7 unchanged · `run-tests.sh` all green
+  (node:test 24/24) · lint + secret-scan clean. Next: 2d (Board tab UI) — then the Phase-5d early
+  preview hand-off.
