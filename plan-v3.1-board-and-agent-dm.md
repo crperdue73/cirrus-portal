@@ -55,7 +55,7 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
 - [x] **4d. Loop safety** — hop counter (max 3), per-pair rate limit, burst budget, no-relay flag, circuit breaker. ✅ 2026-09-26 (`793299b`)
 - [x] **4e. Privacy** — content hidden from admin by default, server-side; `agentDmVisibility` switch; **agents are told** the current visibility and the flip is audited. ✅ 2026-09-26 (`ba4f065`)
 - [x] **4f. Agent DM tab UI** — live traffic, per-pair threads, delivery/reply state. ✅ 2026-09-26 (`59f58bf`)
-- [ ] **4g. Tests** — cross-gateway delivery, awaitReply, **loop regression**, privacy on/off.
+- [x] **4g. Tests** — cross-gateway delivery, awaitReply, **loop regression**, privacy on/off. ✅ 2026-09-26 (`285e6bf`)
 
 ## Phase 5 — Ship to the running server (Dad can see it)
 - [ ] **5a. Version + docs** — VERSION 3.1.0, CHANGELOG, README/ADMIN updates.
@@ -395,3 +395,23 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
   store,sync,loop,privacy} 10/10·6/6·9/9·7/7·6/6 · `node --check` · node:test **24/24** ·
   `run-tests.sh` **all green** (36 standalone suites) · lint + secret-scan clean. Next: 4g (Phase-4 DM gate —
   cross-gateway delivery, awaitReply, loop regression, privacy on/off).
+- **2026-09-26 16:16** — ✅ **4g done** (`285e6bf`). Phase-4 acceptance gate: `test-agent-dm-gate.js` (**7/7**)
+  — the missing regression gate that proves 4a–4f **together** against the REAL server with live + dying fake
+  gateways (the phase-4 twin of `test-agent-api.js`/`test-board-gate.js`/`test-roster-gate.js`). It drives the
+  INTEGRATION seams the per-item suites don't: **A** one portal fans out to two servers with NO cross-leak
+  (alice→lab:bob lands only on LAB in `agent:bob:main`, alice→home:cara only on HOME; the sender ref rides the
+  prompt) and a target on a dead server is refused 404 with no write (`agent_dm_unrouted`); **B** the sender
+  **discovers the peer from `GET /api/agent/roster`** (no hardcoded ref) and DMs it, the `awaitReply` returns the
+  peer's assistant message, and the peer's reply DM **routes back across the servers** into `agent:alice:main`
+  (hop 1) — so the phone book and the router agree on addressing end-to-end; **C** the reply chain still chains
+  **0→1→2→3 across servers** and refuses the 4th (429, no write, `agent_dm_loop_blocked` hops:4), and an unrelated
+  pair resets to hop 0; **D** `awaitReply` lands (200 replied), a no-reply hold times out and **stays delivered**,
+  the async path stays 202; **E** privacy holds on **feed + SSE stream + audit at once** — private body absent from
+  all three while both parties read their own copy, the flip raises a `policy` frame + reveals the body on feed and
+  stream + tells the agents, flipping back re-redacts; **F** feed + stream are admin-only (403 non-admin, 401 anon,
+  Bearer inert on the human feed), no agent token in the log, store 0600; **G** the loop release is **human-only** —
+  an AGENT board post leaves the pair budget spent (`agent_dm_loops_broken` NOT audited) while a signed-in HUMAN
+  board post clears it. Test-only; no `portal-server.js` change. Evidence: `node --check` · `test-agent-dm-gate.js`
+  7/7 · test-agent-dm-{store,route,sync,loop,privacy,ui} 6/6·10/10·9/9·7/7·6/6·6/6 · node:test **24/24** ·
+  `run-tests.sh` all green · lint + secret-scan clean. **Phase 4 complete** — next is Phase 5 (5a: VERSION 3.1.0
+  + CHANGELOG/README/ADMIN docs).
