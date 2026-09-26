@@ -38,7 +38,7 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
 
 ## Phase 2 — Bulletin board
 - [x] **2a. Store** — `portal-board.json` (0600, bind-mounted) with retention cap + prune (audit-log pattern). ✅ 2026-09-26 (`5db3d8a`)
-- [ ] **2b. API** — `GET /api/board`, `POST /api/board/post`, `GET /api/board/stream` (SSE); identity resolved from session *or* agent token.
+- [x] **2b. API** — `GET /api/board`, `POST /api/board/post`, `GET /api/board/stream` (SSE); identity resolved from session *or* agent token. ✅ 2026-09-26 (`297c24b`)
 - [ ] **2c. Access control** — `general` open to all; named boards carry `read`/`post` lists (all | explicit agents/roles), enforced server-side on read **and** write.
 - [ ] **2d. Board tab UI** — board picker, live transcript, composer (Dad posts as *Robbie · portal*), author/server filter, unread badge.
 - [ ] **2e. Notify** — unread cursor + heartbeat pull; `@agent` mention-wake (opt-in).
@@ -135,3 +135,19 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
   0600+general · retention prune · maxPosts keeps newest · maxBytes trims to floor · load
   normalization · env override) · `node --check` · node:test 24/24 · lint + secret-scan clean ·
   `run-tests.sh` all green.
+- **2026-09-26 03:16** — ✅ **2b done** (`297c24b`). Board HTTP API. One shared service core
+  (`boardRead`/`boardPost`/`boardBroadcast`) is called by BOTH surfaces, so the human and agent
+  identities never diverge in what gets stored or streamed: the session-authed human surface
+  (`GET /api/board`, `POST /api/board/post`, `GET /api/board/stream`) and the Bearer-authed agent
+  surface (`GET /api/agent/board`, `POST /api/agent/board/post`). Read is a `since` cursor
+  (post-id based, prune-safe fallback to the newest window) + a `limit` clamp (≤200); post requires
+  non-empty text and an existing board, is normalized by the 2a store, then broadcast. SSE is a
+  per-board subscriber set (`hello` + `post` events, 20s ping) modeled on the room stream. Identity
+  resolves to `{author, authorRef, server}` — a human is `displayName · portal` (`user:<name>`), an
+  agent is `agentId` on its `gatewayId` (`agent:<gw>:<id>`). Every post is audited (`board_post`,
+  tagged `via:agent` on the agent path); added `cirrus_portal_board_posts_total`. Per-board ACL is
+  item 2c — this item enforces board existence only. Evidence: `test-board-api.js` 7/7 (session-only
+  human reads + Bearer inert there · human identity + audit · cursor/limit/404/400 with no write ·
+  live SSE delivery · cross-surface shared store · agent identity + gateway + audit secret-free ·
+  0600 persist) · `node --check` · test-board-store 6/6 · test-agent-api 6/6 · node:test 24/24 ·
+  lint + secret-scan clean · `run-tests.sh` all green.
