@@ -91,6 +91,10 @@ const DEFAULTS = {
   rateLimitPerMinute: 300,     // per-IP request budget for every non-probe route
   rateLimitBurst: 60,          // extra allowance above the steady rate, per window
   maxBodyBytes: 1024 * 1024,   // reject JSON request bodies larger than this (413)
+  // Agent API guardrails (plan item 1c) — layered on the Bearer surface
+  agentRateLimitPerMinute: 120, // per-token request budget for /api/agent/*
+  agentRateLimitBurst: 40,      // extra allowance above the steady rate, per window
+  agentMaxBodyBytes: 64 * 1024, // agent bodies are small; cap well under the global 1 MB
 };
 
 // ── Credential safety ────────────────────────────────────────────────────────
@@ -243,6 +247,9 @@ function loadConfig() {
     PORTAL_RATE_LIMIT_PER_MINUTE: 'rateLimitPerMinute',
     PORTAL_RATE_LIMIT_BURST: 'rateLimitBurst',
     PORTAL_MAX_BODY_BYTES: 'maxBodyBytes',
+    PORTAL_AGENT_RATE_LIMIT_PER_MINUTE: 'agentRateLimitPerMinute',
+    PORTAL_AGENT_RATE_LIMIT_BURST: 'agentRateLimitBurst',
+    PORTAL_AGENT_MAX_BODY_BYTES: 'agentMaxBodyBytes',
   };
   for (const [envKey, cfgKey] of Object.entries(envMap)) {
     if (process.env[envKey] !== undefined) {
@@ -513,6 +520,7 @@ function revokeAgentToken(id) {
   if (!store[key]) return { error: 'no such agent token' };
   const rec = store[key];
   delete store[key];
+  clearAgentRateBucket(key); // 1c: a revoked token leaves no rate residue
   writeSecrets();
   return { record: publicAgentToken(rec) };
 }
@@ -580,29 +588,88 @@ function requireAgent(req, res) {
   return rec;
 }
 
+// ── Agent API guardrails (plan item 1c) ─────────────────────────────────────
+// Layered on top of Bearer auth (1b). Three controls, all in-memory and
+// bounded (a restart clears them, exactly like the per-IP limiter):
+//   • a per-TOKEN rate limit — keyed by token id, not IP, so one noisy agent
+//     cannot spend the fleet's budget and a shared NAT cannot starve a
+//     well-behaved agent;
+//   • a tight body cap well under the global 1 MB (agents post small structured
+//     messages, never uploads);
+//   • an audit entry for every call.
+// Revocation is already authoritative in the 1a store (a revoked token has no
+// record, so verifyAgentToken rejects it); here we also drop its rate bucket so
+// a revoked credential leaves no residue.
+const agentRateBuckets = new Map(); // token id -> { count, resetAt }
+
+function agentRateLimitEnabled() { return (Number(CONFIG.agentRateLimitPerMinute) || 0) > 0; }
+function agentRateMax() {
+  return Math.max(1, Number(CONFIG.agentRateLimitPerMinute) || 120)
+    + Math.max(0, Number(CONFIG.agentRateLimitBurst) || 0);
+}
+function agentMaxBodyBytes() { return Math.max(1024, Number(CONFIG.agentMaxBodyBytes) || 64 * 1024); }
+
+// → null when allowed, else { retryAfter, limit } (seconds until window resets).
+function agentRateCheck(rec) {
+  if (!agentRateLimitEnabled()) return null;
+  const now = Date.now();
+  const key = String((rec && rec.id) || '');
+  let b = agentRateBuckets.get(key);
+  if (!b || b.resetAt <= now) { b = { count: 0, resetAt: now + 60_000 }; agentRateBuckets.set(key, b); }
+  b.count++;
+  // bound memory: drop expired buckets when the map grows large
+  if (agentRateBuckets.size > 5000) for (const [k, v] of agentRateBuckets) if (v.resetAt <= now) agentRateBuckets.delete(k);
+  if (b.count > agentRateMax()) {
+    return { retryAfter: Math.max(1, Math.ceil((b.resetAt - now) / 1000)), limit: agentRateMax() };
+  }
+  return null;
+}
+
+function clearAgentRateBucket(id) { agentRateBuckets.delete(String(id)); }
+
 // The agent-facing API. Everything under /api/agent/* lands here, ahead of the
 // human session + CSRF gates — so an agent token can never reach a human route,
-// and this surface never sees a cookie session. Each call is audited (item 1c
-// layers per-token rate limits, body caps, and revocation on top).
+// and this surface never sees a cookie session. Every call is guarded (1c:
+// per-token rate limit + body cap) and audited.
 async function handleAgentApi(req, res, url) {
   const p = url.pathname;
   const rec = requireAgent(req, res);
   if (!rec) return; // 401 already sent
 
   const ident = { agentId: rec.agentId, gatewayId: rec.gatewayId || '', label: rec.label || '' };
+  const callDetail = { path: p, method: req.method, token: rec.id };
+
+  // Guardrail (1c): body cap. Rejected before the rate budget is touched,
+  // matching the human path's listener ordering (cap, then limit).
+  if (STATE_CHANGING.has(req.method)) {
+    const clen = Number(req.headers['content-length'] || 0);
+    if (clen > agentMaxBodyBytes()) {
+      audit('agent_body_rejected', rec.agentId, 'agent', { ...callDetail, bytes: clen, limit: agentMaxBodyBytes() });
+      return json(res, 413, { error: `agent request body too large (max ${agentMaxBodyBytes()} bytes)` });
+    }
+  }
+
+  // Guardrail (1c): per-token rate limit.
+  const rl = agentRateCheck(rec);
+  if (rl) {
+    METRICS.agentRateLimited++;
+    audit('agent_rate_limited', rec.agentId, 'agent', { ...callDetail, limit: rl.limit });
+    res.setHeader('Retry-After', String(rl.retryAfter));
+    return json(res, 429, { error: 'agent token rate limit exceeded — slow down', retryAfter: rl.retryAfter });
+  }
 
   // Identity probe: lets an agent (and the tests) confirm its own credential
   // without touching any board/DM state. Handy for "am I wired up correctly?".
   if (p === '/api/agent/whoami') {
     if (req.method !== 'GET') {
-      audit('agent_call', rec.agentId, 'agent', { path: p, method: req.method, token: rec.id, status: 405 });
+      audit('agent_call', rec.agentId, 'agent', { ...callDetail, status: 405 });
       return json(res, 405, { error: 'method not allowed' });
     }
-    audit('agent_call', rec.agentId, 'agent', { path: p, method: 'GET', token: rec.id });
+    audit('agent_call', rec.agentId, 'agent', callDetail);
     return json(res, 200, { ok: true, agent: ident });
   }
 
-  audit('agent_call', rec.agentId, 'agent', { path: p, method: req.method, token: rec.id, status: 404 });
+  audit('agent_call', rec.agentId, 'agent', { ...callDetail, status: 404 });
   return json(res, 404, { error: 'not found' });
 }
 
@@ -2494,6 +2561,7 @@ const METRICS = {
   loginFailures: 0,
   csrfRejects: 0,
   rateLimited: 0,
+  agentRateLimited: 0,
 };
 
 // One structured log line. `logFormat:"json"` (the default) emits a JSON object
@@ -2602,6 +2670,7 @@ function metrics(res, req) {
   metric('cirrus_portal_login_failures_total', 'counter', 'Failed or throttled logins since start.', [`cirrus_portal_login_failures_total ${METRICS.loginFailures}`]);
   metric('cirrus_portal_csrf_rejects_total', 'counter', 'State-changing requests rejected on CSRF.', [`cirrus_portal_csrf_rejects_total ${METRICS.csrfRejects}`]);
   metric('cirrus_portal_rate_limited_total', 'counter', 'Requests rejected by the per-IP rate limit.', [`cirrus_portal_rate_limited_total ${METRICS.rateLimited}`]);
+  metric('cirrus_portal_agent_rate_limited_total', 'counter', 'Agent API requests rejected by the per-token rate limit.', [`cirrus_portal_agent_rate_limited_total ${METRICS.agentRateLimited}`]);
   metric('cirrus_portal_audit_entries', 'gauge', 'Lines currently in the audit log.', [`cirrus_portal_audit_entries ${auditLineCount()}`]);
   res.writeHead(200, { 'Content-Type': 'text/plain; version=0.0.4; charset=utf-8' });
   res.end(L.join('\n') + '\n');
