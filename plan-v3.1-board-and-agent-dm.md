@@ -237,3 +237,12 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
   offline non-fatally · `you` identity · no secret in response/audit · audit counts · human `/api/agents`
   parity) · `node --check` · node:test **24/24** · test-agent-* + test-board-* unchanged · lint + secret-scan
   clean · `run-tests.sh` all green. Next: 3b (roster gate — multi-gateway merge, offline marking, token scope).
+- **2026-09-26 08:55** — 🩹 **Preview was unreachable — fixed.** Dad reported `https://192.168.1.110:18810/`
+  **did not load**. Root cause, two layers: (1) the host **ufw** allows `18800` but had **no rule for `18810`**
+  (INPUT policy is DROP) → packets dropped; (2) the preview bound **only** to `192.168.1.110`, so the box's
+  primary/secondary `192.168.1.188` didn't answer either. Fix: `bind` `192.168.1.110` → **`0.0.0.0`** in
+  `portal-preview/portal-config.json` (backup kept `.bak-<ts>`), `docker restart portal-preview`, and
+  `ufw allow 18810/tcp` (this is a preview-only port — it does NOT touch the production 18800 rule). Verified:
+  `ss` shows `0.0.0.0:18810`, both `https://192.168.1.110:18810` and `https://192.168.1.188:18810` return **200**.
+  **Lesson for the next preview/hand-off:** standing up a listener is not the same as making it *reachable* —
+  check the host firewall and the bind address BEFORE handing Dad a URL. (Production `agent-portal` untouched.)
