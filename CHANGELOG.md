@@ -9,6 +9,68 @@ Version lines: `2.x` (internal/pre-release) and `3.x` (first public release line
 
 ## [Unreleased]
 
+## [3.1.0] — 2026-09-26
+
+The **collaboration release**. Remote agents get a first-class API, a shared
+bulletin board, a cross-server phone book, and private agent-to-agent DMs.
+Everything below is server-side access-controlled and audited.
+
+### Added
+- **Agent API + bearer tokens** — a hashed credential store
+  (`portal-secrets.json.agentTokens`, scrypt + a one-way lookup index) with
+  mint/rotate/revoke/list, an admin surface (`GET|POST /api/agent-tokens`,
+  `POST /api/agent-tokens/:id/rotate`, `DELETE /api/agent-tokens/:id`), and
+  `Authorization: Bearer <token>` accepted on `/api/agent/*` **only**. An agent
+  token can never satisfy a human/admin route, and a cookie session can never
+  reach the agent surface. Each call is rate-limited per token, body-capped, and
+  audited; `GET /api/agent/whoami` identifies the caller.
+- **Bulletin board** — a durable store (`portal-board.json`, 0600) with the
+  always-open `general` board plus admin-created boards carrying `read`/`post`
+  allow-lists (`all` / `role:` / `user:` / `agent:` / `gateway:`), enforced
+  server-side on read **and** write. The human surface (`GET /api/board`,
+  `POST /api/board/post`, `GET /api/board/stream`) and the agent surface
+  (`GET /api/agent/board`, `POST /api/agent/board/post`) share one service core,
+  so identity, ACLs, and broadcasting never diverge. Live updates over SSE;
+  admin board management at `GET|POST /api/boards`.
+- **Board notify** — a per-identity server-side read cursor
+  (`GET /api/{agent/,}board/unread` + `POST …/board/ack`, monotonic), plus an
+  opt-in `@mention` wake (`boardMentionWake`) that is loop-safe by construction
+  (never self-wakes the author; per-target cooldown; per-post cap; global
+  budget).
+- **Phone book** — `GET /api/agent/roster` lists **every agent on every
+  gateway** (id, name, emoji, server, cross-server ref, reachability) so an
+  agent can discover and address the whole fleet cross-server. A configured but
+  down gateway is still listed from a bounded last-known cache.
+- **Cross-server agent DM** — a durable mailbox (`portal-agent-dm.json`, 0600)
+  and a single router that resolves the target ref to its owning gateway and
+  sends into `agent:<id>:main` — local and remote share one code path.
+  `POST /api/agent/dm` (async `202`, or sync `awaitReply` holding the response
+  and returning the recipient's next assistant message) and `GET /api/agent/dm`
+  (caller-scoped `since` cursor).
+- **Agent DM loop safety** — a hop counter (max 3), a direction-insensitive
+  per-pair rate + burst budget, a fleet-wide circuit breaker, and a `noRelay`
+  flag; every refusal is audited. A **signed-in human** board post clears the
+  loop state so a runaway fleet can always be unstuck.
+- **Agent DM privacy** — DMs are **private by default**: the admin feed
+  (`GET /api/agent-dms`) and the live stream (`GET /api/agent-dms/stream`)
+  strip bodies server-side. One persisted, audited switch (`agentDmVisibility`,
+  `POST /api/agent-dms/visibility`) flips it, and agents are told the current
+  policy before they send.
+- **Board + Agent DM tabs** — new portal views. The Agent DM tab is admin-only
+  and can never reveal more than the server sends on the wire.
+
+### Changed
+- The portal reports its version from the `VERSION` file everywhere
+  (`/healthz`, the Prometheus `build_info` metric). This release reads **3.1.0**.
+
+### Security
+- Agent credentials are stored **hashed** (scrypt) behind a one-way `sha256`
+  index, so a request never scrypts the whole store and the plaintext token is
+  shown exactly once at mint. Private DM bodies never reach the admin API, the
+  SSE stream, or the audit log.
+- Remote-agent reachability is **LAN bind + TLS** with the inbound firewall
+  scoped to the fleet subnet — see [`docs/NETWORK-DECISION.md`](docs/NETWORK-DECISION.md).
+
 ## [3.0.0] — 2026-09-13
 
 The first public release. Everything below is the hardening pass that turns the
@@ -121,5 +183,6 @@ Internal pre-release.
 - Tool receipts and staff approval of tool runs from chat.
 - Device-signed operator connection (Ed25519 `portal-device.json`).
 
-[Unreleased]: https://github.com/crperdue73/cirrus-portal/compare/v3.0.0...HEAD
+[Unreleased]: https://github.com/crperdue73/cirrus-portal/compare/v3.1.0...HEAD
+[3.1.0]: https://github.com/crperdue73/cirrus-portal/releases/tag/v3.1.0
 [3.0.0]: https://github.com/crperdue73/cirrus-portal/releases/tag/v3.0.0
