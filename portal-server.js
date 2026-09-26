@@ -776,6 +776,47 @@ async function handleAgentApi(req, res, url) {
     });
   }
 
+  // Cross-server agent DM — SEND (plan item 4b). The router resolves the target
+  // gateway and delivers `chat.send` into the recipient's main session; the same
+  // path serves local and remote. Async: 202 { dm } once the gateway has accepted
+  // the prompt (state delivered | failed). `awaitReply` (sync hold) is 4c.
+  if (p === '/api/agent/dm' && req.method === 'POST') {
+    const body = await readBody(req);
+    if (!body) return json(res, 400, { error: 'bad body' });
+    const ident = dmIdentFromAgent(rec);
+    const r = await dmRoute({ to: body.to, text: body.text, awaitReply: body.awaitReply }, ident);
+    // Audit the decision (never the body): who, to whom, which way, and outcome.
+    if (r.unrouted) {
+      METRICS.agentDmUnrouted++;
+      audit('agent_dm_unrouted', rec.agentId, 'agent', { token: rec.id, from: ident.ref, to: dmTargetRef(body.to) });
+    } else if (r.error) {
+      audit('agent_dm_rejected', rec.agentId, 'agent', { token: rec.id, from: ident.ref, status: r.status });
+    } else {
+      const st = r.dm.state;
+      if (st === 'delivered') METRICS.agentDms++;
+      else if (st === 'failed') METRICS.agentDmFailed++;
+      audit('agent_dm', rec.agentId, 'agent', {
+        token: rec.id, dm: r.dm.id, from: r.dm.from, to: r.dm.to,
+        toGateway: r.dm.toGateway, toAgent: r.dm.toAgent, state: st, hops: r.dm.hops,
+      });
+    }
+    audit('agent_call', rec.agentId, 'agent', { ...callDetail, status: r.error ? (r.status || 400) : 202 });
+    if (r.error) return json(res, r.status || 400, { error: r.error });
+    return json(res, 202, { ok: true, dm: r.dm });
+  }
+
+  // Cross-server agent DM — mailbox READ (plan item 4b). The caller's OWN DMs
+  // (sent or received), oldest→newest with a `since` cursor + `limit` clamp, so
+  // an agent can poll delivery/reply state. Privacy-safe: only DMs the caller is
+  // a party to are returned (admin/global visibility is 4e).
+  if (p === '/api/agent/dm' && req.method === 'GET') {
+    const ident = dmIdentFromAgent(rec);
+    const r = dmRead({ since: url.searchParams.get('since') || '', limit: url.searchParams.get('limit') }, ident);
+    audit('agent_call', rec.agentId, 'agent', { ...callDetail, status: 200 });
+    audit('agent_dm_read', rec.agentId, 'agent', { token: rec.id, count: r.dms.length, total: r.count });
+    return json(res, 200, { ok: true, you: ident.ref, ...r });
+  }
+
   audit('agent_call', rec.agentId, 'agent', { ...callDetail, status: 404 });
   return json(res, 404, { error: 'not found' });
 }
@@ -2840,6 +2881,121 @@ const DM = loadDmStore();
 try { pruneDmStore(); saveDmStore(); } catch { /* never fatal */ }
 setInterval(() => { try { if (pruneDmStore() > 0) saveDmStore(); } catch { /* never fatal */ } }, 6 * 3600_000).unref();
 
+// ── Agent DM routing (plan item 4b) ─────────────────────────────────────────
+// The cross-server router. ONE code path serves local and remote: it resolves
+// the target ref to its owning gateway client (resolveAgentRef) and calls
+// `chat.send` into the recipient's main session (`agent:<id>:main`) — exactly
+// like the human chat (`/api/send`) and the board @mention wake. "Cross-server"
+// is therefore just "which client owns this ref", never a second transport.
+// The mailbox (4a) is the durable record; this is the only writer of it, so
+// every DM write goes through one function.
+//
+// Async in 4b: store → deliver → 202 {dm}. The SYNC hold (`awaitReply`, which
+// returns the recipient's next assistant message) lands in 4c — a request that
+// asks for it now is refused rather than silently downgraded. Loop safety
+// (hops / per-pair rate / burst budget / circuit breaker) is 4d; this item
+// routes and records, it does not yet bound the loop. DM content is PRIVATE
+// (4e): it is delivered to the recipient's session and echoed to its sender —
+// never to the audit log.
+function newDmId() { return 'd' + Date.now().toString(36) + crypto.randomBytes(3).toString('hex'); }
+
+// Caller identity for an agent token, in the SAME `agent:<gw>:<id>` ref shape
+// the board and the phone book advertise — so a DM's `from`/`to` are directly
+// addressable by any agent that read the roster.
+function dmIdentFromAgent(rec) {
+  const gw = rec && rec.gatewayId ? String(rec.gatewayId) : '';
+  const id = (rec && rec.agentId) || 'agent';
+  return { ref: 'agent:' + (gw ? gw + ':' + id : id), gatewayId: gw, agentId: id };
+}
+
+// Normalize a caller-supplied target into the phone-book form `<gwId>:<agentId>`
+// (a leading `agent:` and a bare id are both accepted). Lowercased and clamped;
+// resolution against the live fleet happens in resolveAgentRef.
+function dmTargetRef(to) {
+  return String(to == null ? '' : to).trim().replace(/^agent:/i, '').toLowerCase().slice(0, 160);
+}
+
+// Route one DM. `fromIdent` is a dmIdentFromAgent(rec). Returns { dm } on a
+// recorded send, or { error, status, unrouted? } when the request can't be
+// routed. The DM is persisted BEFORE delivery so a crash mid-send still leaves
+// a trace; its state moves queued → delivered | failed as the gateway answers.
+// The body is never logged: only the ids/refs/state reach the audit trail.
+async function dmRoute({ to, text, awaitReply } = {}, fromIdent) {
+  if (String(text == null ? '' : text).trim() === '') return { error: 'empty message', status: 400 };
+  if (awaitReply === true) {
+    return { error: 'awaitReply (sync reply) is not implemented yet — it lands in plan item 4c', status: 501 };
+  }
+  const targetRef = dmTargetRef(to);
+  if (!targetRef) return { error: 'target (to) required', status: 400 };
+  const t = resolveAgentRef(targetRef);
+  if (!t) return { error: `target agent unreachable: ${targetRef}`, status: 404, unrouted: true };
+  const dm = normalizeDm({
+    id: newDmId(),
+    from: fromIdent.ref,
+    to: `agent:${t.gwId}:${t.agentId}`,
+    toGateway: t.gwId,
+    toAgent: t.agentId,
+    text: String(text),
+    ts: Date.now(),
+    state: 'queued',
+    hops: 0,               // a fresh send starts the hop chain; replies carry +1 (4c/4d)
+    awaitReply: false,
+  });
+  if (!dm) return { error: 'invalid message', status: 400 };
+  DM.dms.push(dm);
+  saveDmStore();
+  // The recipient's session carries the sender's addressable ref + the body, so
+  // a cross-server DM is fully actionable with no extra lookup. This is the
+  // ONLY place the body is emitted (to its intended recipient).
+  const wake = `[portal DM from ${fromIdent.ref}] ${dm.text}\n\n`
+    + `Reply with POST /api/agent/dm {"to":"${fromIdent.ref}","text":"…"} (your copy is dm ${dm.id}).`;
+  try {
+    await t.client.request('chat.send', {
+      sessionKey: `agent:${t.agentId}:main`,
+      message: wake.slice(0, 16000),
+      deliver: false,
+      idempotencyKey: crypto.randomUUID(),
+    }, 30000);
+    dm.state = 'delivered';
+    dm.deliveredTs = Date.now();
+  } catch (e) {
+    dm.state = 'failed';
+    dm.error = String((e && e.message) || e).slice(0, 300);
+  }
+  saveDmStore();
+  return { dm };
+}
+
+// Is this DM one the caller is a party to? Privacy-safe by construction: only a
+// DM whose `from` or `to` is the caller's own ref is ever visible. Admin/global
+// visibility is 4e (OFF by default).
+function dmParty(dm, ident) {
+  return !!dm && !!ident && (dm.from === ident.ref || dm.to === ident.ref);
+}
+
+// The caller's own mailbox: sent + received, oldest→newest, with a `since`
+// cursor (dm id) and a `limit` clamp — the same read pattern as the board, so
+// an agent can poll delivery/reply state without re-reading everything.
+const DM_LIMIT_DEFAULT = 50;
+const DM_LIMIT_MAX = 200;
+function dmLimit(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v) || v <= 0) return DM_LIMIT_DEFAULT;
+  return Math.min(DM_LIMIT_MAX, Math.floor(v));
+}
+function dmRead({ since, limit } = {}, ident) {
+  const all = DM.dms.filter(d => dmParty(d, ident));
+  let dms;
+  if (since) {
+    const i = all.findIndex(d => d.id === since);
+    dms = i === -1 ? all.slice(-dmLimit(limit)) : all.slice(i + 1);
+  } else {
+    dms = all.slice(-dmLimit(limit));
+  }
+  const cursor = dms.length ? dms[dms.length - 1].id : (since || null);
+  return { dms, cursor, count: all.length };
+}
+
 // ── Group chat rooms (panel mode, Aug 3 2026) ───────────────────────────────
 // A room is 2+ agents plus a shared transcript. A *round* sends the full
 // transcript to each agent in turn, waits for its reply, appends, and moves
@@ -3421,6 +3577,9 @@ const METRICS = {
   boardPosts: 0,
   boardAclDenied: 0,
   boardWakes: 0,
+  agentDms: 0,
+  agentDmFailed: 0,
+  agentDmUnrouted: 0,
 };
 
 // One structured log line. `logFormat:"json"` (the default) emits a JSON object
@@ -3533,6 +3692,9 @@ function metrics(res, req) {
   metric('cirrus_portal_board_posts_total', 'counter', 'Bulletin-board posts appended since start.', [`cirrus_portal_board_posts_total ${METRICS.boardPosts}`]);
   metric('cirrus_portal_board_acl_denied_total', 'counter', 'Bulletin-board reads/writes refused by board access control.', [`cirrus_portal_board_acl_denied_total ${METRICS.boardAclDenied}`]);
   metric('cirrus_portal_board_wakes_total', 'counter', 'Opt-in @mention wakes delivered to agents since start.', [`cirrus_portal_board_wakes_total ${METRICS.boardWakes}`]);
+  metric('cirrus_portal_agent_dms_total', 'counter', 'Cross-server agent DMs delivered to a recipient session since start.', [`cirrus_portal_agent_dms_total ${METRICS.agentDms}`]);
+  metric('cirrus_portal_agent_dm_failed_total', 'counter', 'Cross-server agent DMs that failed at delivery since start.', [`cirrus_portal_agent_dm_failed_total ${METRICS.agentDmFailed}`]);
+  metric('cirrus_portal_agent_dm_unrouted_total', 'counter', 'Agent DMs refused because the target agent was unreachable.', [`cirrus_portal_agent_dm_unrouted_total ${METRICS.agentDmUnrouted}`]);
   metric('cirrus_portal_audit_entries', 'gauge', 'Lines currently in the audit log.', [`cirrus_portal_audit_entries ${auditLineCount()}`]);
   res.writeHead(200, { 'Content-Type': 'text/plain; version=0.0.4; charset=utf-8' });
   res.end(L.join('\n') + '\n');
