@@ -60,7 +60,7 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
 ## Phase 5 — Ship to the running server (Dad can see it)
 - [x] **5a. Version + docs** — VERSION 3.1.0, CHANGELOG, README/ADMIN updates. ✅ 2026-09-26 (`fb77c59`)
 - [x] **5b. Gates green** — `run-tests.sh`, `lint.sh`, `e2e-verify.sh`, `secret-scan.sh`. ✅ 2026-09-26 (all green; evidence in Progress log).
-- [ ] **5c. Release artifact** — `release.sh 3.1.0` (local only).
+- [x] **5c. Release artifact** — `release.sh 3.1.0` (local only). ✅ 2026-09-26 (signed; sha256 `89c04d4d…`)
 - [ ] **5d. Preview instance on the live box** — LAN bind + TLS, separate port/container/state. Production container untouched.
 - [ ] **5e. Live E2E proof** — agent posts to the board; Dad's own post lands; agent on one server DMs an agent on another; roster returns the full fleet.
 - [ ] **5f. Tell Dad it's live** — hand over URL + credentials, ask for QA. **Loop stops here until Dad rules.**
@@ -440,3 +440,17 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
   (`.github/workflows/ci.yml`) already wires all four (lint · test[run-tests + e2e] · secret-scan[repo + tar] ·
   build), so a push is gated on them. Production `agent-portal` + preview `portal-preview` untouched.
   Next: 5c (local-only release artifact `release.sh 3.1.0`).
+- **2026-09-26 19:16** — ✅ **5c done** (artifact `dist/cirrus-portal-3.1.0.tar.gz` sha256 `89c04d4d…`;
+  local annotated tag `v3.1.0`). Cut the release artifact **locally**, clock pinned to the release-content commit
+  `2071f2a` so the bytes don't move with doc-only ticks: `SOURCE_DATE_EPOCH=1790461195
+  RELEASE_GPG_KEY=release@crperdue.com ./release.sh 3.1.0` (i.e. `2026-09-26T22:19:55Z`; anyone can reproduce with
+  that same `SOURCE_DATE_EPOCH`). Under `dist/` (gitignored — never committed): the tarball
+  (52 entries, **code + installer + docs only**, no state/test/dev files), the CycloneDX 1.5 SBOM (base-image digest
+  matches the Dockerfile), and `SHA256SUMS` **detached-signed** with the real Cirrus release key (`0A12…417D`; public
+  half `cirrus-portal-release-key.asc`). Evidence: `sha256sum -c SHA256SUMS` OK · `gpg --verify` = **Good signature** ·
+  `secret-scan.sh --tar` clean · **reproducible** (rebuild → byte-identical `89c04d4d…`) · tarball smoke-install
+  (`tar xzf` → `bash -n install.sh` → `./install.sh install --dry-run` exit 0). Created the **local** annotated tag
+  `v3.1.0` (RELEASING.md §7) — **no remote, nothing pushed**; it moves if 5e surfaces a fix. Production `agent-portal`
+  + preview `portal-preview` untouched. Next: 5d (formal preview instance on the live box), then 5e/5f.
+
+  > Tag note: `v3.1.0` is local-only and will be re-cut (`git tag -d` + re-tag) if the live E2E (5e) forces a code fix.
