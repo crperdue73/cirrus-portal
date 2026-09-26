@@ -185,7 +185,7 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
   over `/app`), **host net**, **LAN bind `192.168.1.110:18810`**, **TLS on** (self-signed SAN cert), **separate
   state** `/home/noah/.openclaw/workspace-noah/portal-preview/` (config 0600, runs as uid 10001, `--read-only` +
   `cap-drop ALL`). **Production `agent-portal` untouched** (still 0.0.0.0:18800). Seeded two posts on `general`;
-  admin display name set to *Robbie* so the board shows "Robbie · portal". Credentials: `admin` + the value in
+  admin display name was the operator's real name so the board showed "<name> · portal". Credentials: `admin` + the value in
   `portal-preview/.preview-admin-password` (kept OUT of the repo — not committed, never printed to logs). URL +
   creds reported to Dad in the run report. Bind is scoped to the specific LAN IP (not `0.0.0.0`); the ufw
   fleet-subnet rule stays a migration-window step. **5d is deliberately NOT ticked** (this is a click-now preview;
@@ -247,15 +247,17 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
   **Lesson for the next preview/hand-off:** standing up a listener is not the same as making it *reachable* —
   check the host firewall and the bind address BEFORE handing Dad a URL. (Production `agent-portal` untouched.)
 - **2026-09-26 09:05** — 🩹 **Board composer identity de-hardcoded.** Dad: the composer landed as
-  *Robbie · portal*; it must land as the **signed-in user**, and nothing public may have "Robbie" baked in.
-  The resolution logic was already correct (`boardIdentFromUser` = `user.displayName || user.username`); the
-  *seeded preview account* was the culprit — the setup set the admin's `displayName` to `Robbie`. Fixes:
-  (1) preview `portal-users.json` → `displayName:"Admin"`; (2) rewrote the two demo posts' stored `author`
-  (they persist at post time) → `Admin · portal`; (3) scrubbed the two code comments in `portal-server.js` /
-  `portal.html` that documented the "Robbie · portal" assumption → generic signed-in-account wording;
-  (4) `test-setup.js` fixture renamed `robbie`/`Robbie` → `admin`/`Admin`. Verified live: `/api/board?board=general`
-  returns both posts as **Admin · portal**. `node --check` · test-board-ui 6/6 · test-setup 3/3. To make a real
-  *Robbie* account: admin → Users → create `robbie` with displayName `Robbie` (no code change needed).
+  *<name> · portal* (a hard-coded personal name); it must land as the **signed-in user**, and **no personal
+  name may be baked into anything that can ship to GitHub**. The resolution logic was already correct
+  (`boardIdentFromUser` = `user.displayName || user.username`); the *seeded preview account* was the culprit —
+  the setup set the admin's `displayName` to a real name. Fixes: (1) preview `portal-users.json` →
+  `displayName:"Admin"`; (2) rewrote the two demo posts' stored `author` (they persist at post time) →
+  `Admin · portal`; (3) scrubbed the two code comments in `portal-server.js` / `portal.html` that documented
+  the personal-name assumption → generic signed-in-account wording; (4) `test-setup.js` fixture renamed to
+  `admin`/`Admin`. Verified live: `/api/board?board=general` returns both posts as **Admin · portal**.
+  `node --check` · test-board-ui 6/6 · test-setup 3/3. Guard added: `secret-scan.sh` now fails on a personal
+  name in any tracked file, so the build loop can't reintroduce it. (A real per-person account is created in
+  the admin UI — no code change needed.)
 - **2026-09-26 09:16** — ✅ **3b done** (`72fcc60`). Phase-3 acceptance gate: `test-roster-gate.js` (6/6) —
   the missing regression gate that proves the 3a phone book **together** against the REAL server with live +
   dying fake gateways (the phase-3 twin of `test-agent-api.js` / `test-board-gate.js`). Drives the integration

@@ -41,6 +41,9 @@ PAT_ASSIGN='"[a-z0-9_.-]*(token|password|passwd|secret|api_?key|access_?key|priv
 PAT_PLACEHOLDER='REPLACE|replace|EXAMPLE|example|PLACEHOLDER|placeholder|CHANGEME|change[-_]me|YOUR[_-]|your[_-]|XXXX|xxxx|<|>|\{\{|\}\}|\.\.\.'
 # Historically shared/legacy secrets (only flagged in data/config files).
 PAT_LEGACY='perdue-portal-2026|pocket-aegis-root-2026'
+# A real person's name must never be baked into anything that can ship to GitHub.
+# The literal is split so this pattern cannot match its own definition below.
+PAT_PERSONAL="[Rr]ob"'bie'
 PAT_PEM='BEGIN (RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY'
 # Runtime-state files that must never be tracked or shipped.
 PAT_FORBIDDEN='^(portal-config\.json|portal-config\.json\.bak.*|portal-secrets\.json|portal-device\.json|portal-users\.json|portal-rooms\.json|portal-context\.json|portal-audit\.log|portal\.log|install\.log|portal-credentials\.txt|portal-first-run\.txt)$'
@@ -80,6 +83,13 @@ scan_file() {
       fi
       ;;
   esac
+
+  # 4) personal names — the product must not ship a human's name baked in
+  hits="$(grep -nIE "$PAT_PERSONAL" "$f" 2>/dev/null || true)"
+  if [ -n "$hits" ]; then
+    flag "$rel: personal name in a shipped file"
+    printf '%s\n' "$hits" | sed "s|^|      $rel:|" >&2
+  fi
 }
 
 scan_tree() {
