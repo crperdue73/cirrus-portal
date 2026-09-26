@@ -33,7 +33,7 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
 ## Phase 1 — Agent API foundation (both features depend on this)
 - [x] **1a. Agent token store** — `portal-secrets.json.agentTokens`, token **hashed** (scrypt), value `{agentId, gatewayId, label, createdAt}`; mint/revoke/rotate helper + admin UI hook. ✅ 2026-09-25 (`b54f63b`)
 - [x] **1b. Bearer auth** — `Authorization: Bearer <token>` accepted **only** on `/api/agent/*`; never satisfiable on human/admin routes; no CSRF on that path (no cookies). ✅ 2026-09-25 (`ae02dc5`)
-- [ ] **1c. Guardrails** — per-token rate limit, body cap, audit entry per call, revocation.
+- [x] **1c. Guardrails** — per-token rate limit, body cap, audit entry per call, revocation. ✅ 2026-09-26 (`460dd30`)
 - [ ] **1d. Tests** — token auth, scope isolation, revoked token rejected, rate limit.
 
 ## Phase 2 — Bulletin board
@@ -99,3 +99,17 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
   `agent_auth_reject`). Evidence: `test-agent-bearer.js` 6/6 (valid Bearer · bad-cred refusal · rotate/revoke
   invalidation · scope isolation both ways · no-CSRF on the agent path · audit, no secret) · lint +
   secret-scan clean · `run-tests.sh` all green.
+- **2026-09-26 00:16** — ✅ **1c done** (`460dd30`). Agent API guardrails, layered on the Bearer surface
+  (1b) and dispatched ahead of the human session + CSRF gates: a **per-token** rate limit
+  (`agentRateLimitPerMinute`/`Burst`, default 120+40/min) keyed by token id — not IP — so one noisy
+  agent can't spend the fleet budget and a shared NAT can't starve a well-behaved one (429 +
+  `Retry-After`); a tight **body cap** (`agentMaxBodyBytes`, default 64 KB) enforced *before* the rate
+  budget is touched (mirrors the human path's cap→limit ordering; 413); an **audit entry per call**
+  (`agent_call` / `agent_body_rejected` / `agent_rate_limited`); and **revocation** stays authoritative
+  in the 1a store with the token's rate bucket dropped so a revoked credential leaves no residue.
+  Added `cirrus_portal_agent_rate_limited_total` + the three keys to the example config
+  (`test/config.test.js` KNOWN_CONFIG_KEYS updated to match). Evidence: `test-agent-guardrails.js` 5/5
+  (body cap→413 no budget spent · budget→429+Retry-After+metric · per-token isolation · revoke→401
+  others unaffected · exactly one audit entry per call, no secret) · `test-agent-bearer.js` 6/6 ·
+  `test-agent-tokens.js` 6/6 · `node --test test/config.test.js` 4/4 · lint + secret-scan clean ·
+  `run-tests.sh` all green.
