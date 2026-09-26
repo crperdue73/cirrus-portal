@@ -59,7 +59,7 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
 
 ## Phase 5 — Ship to the running server (Dad can see it)
 - [x] **5a. Version + docs** — VERSION 3.1.0, CHANGELOG, README/ADMIN updates. ✅ 2026-09-26 (`fb77c59`)
-- [ ] **5b. Gates green** — `run-tests.sh`, `lint.sh`, `e2e-verify.sh`, `secret-scan.sh`.
+- [x] **5b. Gates green** — `run-tests.sh`, `lint.sh`, `e2e-verify.sh`, `secret-scan.sh`. ✅ 2026-09-26 (all green; evidence in Progress log).
 - [ ] **5c. Release artifact** — `release.sh 3.1.0` (local only).
 - [ ] **5d. Preview instance on the live box** — LAN bind + TLS, separate port/container/state. Production container untouched.
 - [ ] **5e. Live E2E proof** — agent posts to the board; Dad's own post lands; agent on one server DMs an agent on another; roster returns the full fleet.
@@ -430,3 +430,13 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
   build @ 3.1.0, SBOM matches, local annotated `v3.1.0` tag) · test-network-decision 5/5 · lint + secret-scan
   clean · **`run-tests.sh` all green**. Docs/version only — no `portal-server.js`/`portal.html` change; preview
   `portal-preview` untouched. Next: 5b (all gates green).
+- **2026-09-26 18:16** — ✅ **5b done**. Gate checkpoint before ship — no code change, all four gates run
+  green on the v3.1.0 tree. `lint.sh` clean (51 JS `node --check` · 8 shell `bash -n` · 3 JSON well-formed ·
+  no CRLF) · `secret-scan.sh` clean (0 findings; tracked-file forbidden-state check included) ·
+  **`run-tests.sh` all green** (node:test **24/24** + **37** standalone suites) ·
+  **`e2e-verify.sh --backend docker` PASSED — 21 checks in 7s** (fresh-box `install --dry-run` + hardened image
+  build · no-credential wizard mints admin · room round-trip + disk persist · upgrade/rebuild on SAME state
+  survives · encrypted backup → total loss → restore sha256-identical, boots + logs in). CI
+  (`.github/workflows/ci.yml`) already wires all four (lint · test[run-tests + e2e] · secret-scan[repo + tar] ·
+  build), so a push is gated on them. Production `agent-portal` + preview `portal-preview` untouched.
+  Next: 5c (local-only release artifact `release.sh 3.1.0`).
