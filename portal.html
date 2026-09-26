@@ -422,6 +422,55 @@
   .msg .sender-label { font-size: 10px; color: var(--muted); margin-bottom: 3px; font-weight: 700; }
   .bubble.meta { background: transparent; color: var(--muted); font-size: 11.5px; font-family: ui-monospace, monospace; padding: 2px 10px; border: none; }
 
+  /* ── Bulletin board (plan item 2d) ── */
+  .board-head { display: flex; align-items: center; gap: 12px; padding: 2px 0 12px; border-bottom: 1px solid var(--line); margin-bottom: 10px; flex-wrap: wrap; }
+  .board-picker { display: flex; gap: 6px; flex-wrap: wrap; flex: 1; min-width: 0; }
+  .board-picker button {
+    border: 1px solid var(--line); background: var(--panel2); color: var(--muted);
+    padding: 5px 12px; border-radius: 999px; font-size: 12px; font-weight: 600; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .board-picker button:hover { color: var(--text); border-color: rgba(0,212,232,.4); }
+  .board-picker button.active { color: var(--amber); border-color: rgba(0,212,232,.5); background: rgba(0,212,232,.08); }
+  .board-filters { display: flex; gap: 6px; align-items: center; flex: none; }
+  .board-filters input, .board-filters select {
+    background: var(--panel2); border: 1px solid var(--line); color: var(--text);
+    border-radius: 8px; padding: 5px 8px; font-size: 12px; min-width: 0;
+  }
+  .board-filters input:focus, .board-filters select:focus { outline: none; border-color: rgba(0,212,232,.5); }
+  .unread-badge {
+    display: inline-block; min-width: 16px; padding: 0 5px; border-radius: 999px;
+    background: var(--amber); color: #05272e; font-size: 10px; font-weight: 800; line-height: 16px; text-align: center;
+  }
+  .nav button .unread-badge { margin-left: 5px; }
+  #boardPosts { flex: 1; overflow-y: auto; padding: 8px 4px 16px; }
+  #boardPosts .empty { height: auto; padding: 60px 20px; }
+  .board-msg { margin-bottom: 14px; }
+  .board-msg .meta { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 4px; }
+  .board-msg.user .meta { justify-content: flex-end; }
+  .board-msg .author { font-size: 12.5px; font-weight: 700; }
+  .board-msg.user .author { color: var(--amber2); }
+  .board-msg .srv { font-size: 10.5px; color: var(--slate); background: rgba(115,163,200,.12); border: 1px solid rgba(115,163,200,.3); padding: 0 6px; border-radius: 10px; }
+  .board-msg .when { font-size: 10.5px; color: var(--muted); }
+  .board-msg .body {
+    display: inline-block; max-width: 780px; padding: 9px 13px; border-radius: 10px;
+    background: var(--panel2); border: 1px solid var(--line); font-size: 14px; line-height: 1.5;
+    white-space: pre-wrap; word-break: break-word;
+  }
+  .board-msg.user .body { background: linear-gradient(135deg, var(--user), var(--user2)); color: #fff; border-color: transparent; }
+  .board-msg.user { text-align: right; }
+  .board-msg .tags { margin-top: 4px; }
+  #boardInput {
+    flex: 1; resize: none; min-height: 46px; max-height: 160px;
+    padding: 12px 14px; border-radius: 12px;
+    border: 1px solid var(--line); background: var(--panel2); color: var(--text);
+    font-size: 14.5px; line-height: 1.5; outline: none; font-family: inherit;
+  }
+  #boardInput:focus { border-color: var(--amber); }
+  .board-composer { padding: 12px 0 16px; border-top: 1px solid var(--line); }
+  .board-composer .composer-row { gap: 8px; }
+  .board-aswho { font-size: 11px; color: var(--muted); margin-bottom: 6px; }
+
   /* ── context strip (CI30) ── */
   #ctxStrip {
     border-bottom: 1px solid var(--line);
@@ -709,6 +758,9 @@ function buildNav() {
   const m = state.me;
   const items = [];
   items.push({ key: 'agents', label: 'Agents' });
+  // Board is for everyone — the server advertises only the boards a caller may
+  // read, so the picker is the ACL, not the nav (plan item 2d).
+  items.push({ key: 'board', label: 'Board' });
   if (m.role === 'admin' || m.role === 'instructor') {
     items.push({ key: 'dashboard', label: 'Dashboard' });
   }
@@ -725,8 +777,15 @@ function buildNav() {
   }
   for (const it of items) {
     const b = document.createElement('button');
-    b.textContent = it.label;
     b.dataset.view = it.key;
+    b.appendChild(document.createTextNode(it.label));
+    if (it.key === 'board') {
+      // Unread badge rides on the nav button; hidden until there is something new.
+      const badge = document.createElement('span');
+      badge.id = 'navBoardBadge';
+      badge.className = 'unread-badge hidden';
+      b.appendChild(badge);
+    }
     b.addEventListener('click', () => setView(it.key));
     nav.appendChild(b);
   }
@@ -736,6 +795,7 @@ function setView(view) {
   state.view = view;
   document.querySelectorAll('.nav button').forEach(b => b.classList.toggle('active', b.dataset.view === view));
   closeStream();
+  boardTeardown();
   const chat = $('chatView');
   const mgmt = $('mgmtView');
   if (view === 'agents') {
@@ -749,12 +809,14 @@ function setView(view) {
     mgmt.classList.remove('hidden');
     mgmt.style.display = '';
     mgmt.style.flexDirection = '';
+    mgmt.style.overflow = 'auto';
     if (view === 'dashboard') renderDashboard();
     else if (view === 'users') renderUsers();
     else if (view === 'gateways') renderGateways();
     else if (view === 'audit') renderAudit();
     else if (view === 'students') renderStudents();
     else if (view === 'rooms') renderRooms();
+    else if (view === 'board') renderBoard();
   }
 }
 
@@ -2164,6 +2226,308 @@ async function roomStop() {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'stop' }),
     });
   } catch (e) { toast(e.message); }
+}
+
+// ── Bulletin board view (plan item 2d) ──
+// The Board tab is a live transcript: a picker of the boards this caller may
+// read (the server advertises only ACL-allowed boards), a composer that posts
+// as the signed-in human — Dad posts as "Robbie · portal" — author/server
+// filters, and an unread badge. Unread is tracked client-side against a
+// per-board cursor kept in localStorage; the server-side unread cursor and
+// heartbeat pull are plan item 2e.
+const BOARD_SEEN_KEY = 'cirrusBoardSeen';
+const boardState = {
+  current: null,   // board id currently open
+  boards: [],      // boards this caller may read ({id,name,description})
+  posts: [],       // posts loaded for `current` (oldest→newest)
+  cursor: null,    // newest post id we hold for `current`
+  es: null,        // EventSource for the live board stream
+  author: '',      // author filter (substring, case-insensitive)
+  server: '',      // server filter (exact)
+  seen: {},        // boardId → newest post id the human has seen
+  unread: {},      // boardId → unread count
+  timer: null,     // badge-refresh interval while the board view is open
+};
+
+function boardSeenLoad() {
+  try { boardState.seen = JSON.parse(localStorage.getItem(BOARD_SEEN_KEY) || '{}') || {}; }
+  catch { boardState.seen = {}; }
+}
+function boardSeenSave() {
+  try { localStorage.setItem(BOARD_SEEN_KEY, JSON.stringify(boardState.seen)); } catch { /* private mode */ }
+}
+
+function boardTotalUnread() {
+  return Object.values(boardState.unread).reduce((n, v) => n + (v > 0 ? v : 0), 0);
+}
+function boardNavBadge() {
+  const b = $('navBoardBadge');
+  if (!b) return;
+  const n = boardTotalUnread();
+  b.textContent = n > 99 ? '99+' : String(n);
+  b.classList.toggle('hidden', n <= 0);
+}
+
+function boardPassesFilter(p) {
+  const a = boardState.author.trim().toLowerCase();
+  if (a && !String(p.author || '').toLowerCase().includes(a)) return false;
+  if (boardState.server && p.server !== boardState.server) return false;
+  return true;
+}
+
+function boardEmptyHtml() {
+  const filtered = boardState.posts.length && !boardState.posts.some(boardPassesFilter);
+  return filtered
+    ? '<div class="empty"><div class="big">🔎</div><div class="hint">No posts match this filter.</div></div>'
+    : '<div class="empty"><div class="big">📌</div><div class="hint">No posts yet — be the first to say something.</div></div>';
+}
+
+function boardBubble(p) {
+  const wrap = document.createElement('div');
+  // A human post (authorRef "user:<name>") reads as the signed-in person; an
+  // agent post carries its gateway as the server chip.
+  const isHuman = String(p.authorRef || '').startsWith('user:');
+  wrap.className = 'board-msg ' + (isHuman ? 'user' : 'assistant');
+  wrap.dataset.postId = p.id;
+  const meta = document.createElement('div');
+  meta.className = 'meta';
+  const author = document.createElement('span');
+  author.className = 'author';
+  author.textContent = p.author || 'unknown';
+  const srv = document.createElement('span');
+  srv.className = 'srv';
+  srv.textContent = p.server || '?';
+  const when = document.createElement('span');
+  when.className = 'when';
+  when.textContent = fmtTime(p.ts);
+  meta.appendChild(author); meta.appendChild(srv); meta.appendChild(when);
+  const body = document.createElement('div');
+  body.className = 'body';
+  body.textContent = p.text || '';
+  wrap.appendChild(meta);
+  wrap.appendChild(body);
+  if (Array.isArray(p.tags) && p.tags.length) {
+    const tags = document.createElement('div');
+    tags.className = 'tags';
+    for (const t of p.tags) {
+      const sp = document.createElement('span');
+      sp.className = 'tag';
+      sp.textContent = '#' + t;
+      tags.appendChild(sp);
+    }
+    wrap.appendChild(tags);
+  }
+  return wrap;
+}
+
+function renderBoardTranscript() {
+  const box = $('boardPosts');
+  if (!box) return;
+  box.innerHTML = '';
+  const posts = boardState.posts.filter(boardPassesFilter);
+  if (!posts.length) { box.innerHTML = boardEmptyHtml(); return; }
+  for (const p of posts) box.appendChild(boardBubble(p));
+  box.scrollTop = box.scrollHeight;
+}
+
+// Append one live post (from the SSE stream), de-duped by id so a replayed or
+// self-authored post never doubles up.
+function appendBoardPost(p) {
+  if (!p || !p.id) return;
+  if (boardState.posts.some(x => x.id === p.id)) return;
+  boardState.posts.push(p);
+  boardState.cursor = p.id;
+  const box = $('boardPosts');
+  if (!box) return;
+  if (!boardPassesFilter(p)) return;
+  const empty = box.querySelector('.empty');
+  if (empty) empty.remove();
+  box.appendChild(boardBubble(p));
+  box.scrollTop = box.scrollHeight;
+}
+
+function boardFillServerFilter() {
+  const sel = $('boardServerFilter');
+  if (!sel) return;
+  const servers = Array.from(new Set(boardState.posts.map(p => p.server).filter(Boolean))).sort();
+  const cur = boardState.server;
+  sel.innerHTML = '<option value="">All servers</option>';
+  for (const s of servers) {
+    const o = document.createElement('option');
+    o.value = s; o.textContent = s;
+    sel.appendChild(o);
+  }
+  if (servers.includes(cur)) sel.value = cur;
+  else { sel.value = ''; boardState.server = ''; }
+}
+
+function renderBoardPicker() {
+  const box = $('boardPicker');
+  if (!box) return;
+  if (!boardState.boards.length) { renderBoardPickerEmpty(); return; }
+  box.innerHTML = '';
+  for (const b of boardState.boards) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.dataset.board = b.id;
+    btn.classList.toggle('active', b.id === boardState.current);
+    btn.appendChild(document.createTextNode(b.name || b.id));
+    const n = boardState.unread[b.id] || 0;
+    if (n > 0) {
+      const sp = document.createElement('span');
+      sp.className = 'unread-badge';
+      sp.textContent = n > 99 ? '99+' : String(n);
+      btn.appendChild(sp);
+    }
+    if (b.description) btn.title = b.description;
+    btn.addEventListener('click', () => openBoard(b.id));
+    box.appendChild(btn);
+  }
+}
+function renderBoardPickerEmpty() {
+  const box = $('boardPicker');
+  if (box) box.innerHTML = '<span style="color:var(--muted);font-size:12px;">No boards you can read yet.</span>';
+}
+
+async function refreshBoardPicker() {
+  // `general` is readable by everyone, so use it to pull the picker's board
+  // list (the read response carries the boards this caller may read).
+  let data;
+  try { data = await api('/api/board?board=general&limit=1'); }
+  catch { boardState.boards = []; renderBoardPickerEmpty(); return; }
+  boardState.boards = data.boards || [];
+  renderBoardPicker();
+}
+
+async function refreshBoardUnread() {
+  const boards = boardState.boards || [];
+  for (const b of boards) {
+    if (b.id === boardState.current) { boardState.unread[b.id] = 0; continue; }
+    const seen = boardState.seen[b.id];
+    try {
+      if (!seen) {
+        // First look at this board for this caller: treat what's already there
+        // as read, and remember the cursor so only *new* posts count.
+        const d = await api('/api/board?board=' + encodeURIComponent(b.id) + '&limit=1');
+        if (d.cursor) { boardState.seen[b.id] = d.cursor; boardSeenSave(); }
+        boardState.unread[b.id] = 0;
+      } else {
+        const d = await api('/api/board?board=' + encodeURIComponent(b.id) + '&since=' + encodeURIComponent(seen) + '&limit=200');
+        boardState.unread[b.id] = (d.posts || []).length;
+      }
+    } catch { /* board became unreadable (ACL change) — skip it */ }
+  }
+  renderBoardPicker();
+  boardNavBadge();
+}
+
+async function openBoard(id) {
+  if (!id) return;
+  closeBoardStream();
+  boardState.current = id;
+  let data;
+  try { data = await api('/api/board?board=' + encodeURIComponent(id)); }
+  catch (e) { toast(e.message); return; }
+  boardState.boards = data.boards || boardState.boards;
+  boardState.posts = data.posts || [];
+  boardState.cursor = data.cursor || null;
+  // Viewing a board clears its unread and remembers the newest post as seen.
+  const newest = boardState.posts.length ? boardState.posts[boardState.posts.length - 1].id : boardState.cursor;
+  if (newest) boardState.seen[id] = newest;
+  boardState.unread[id] = 0;
+  boardSeenSave();
+  boardNavBadge();
+  const to = $('boardPostTo');
+  if (to) { const b = boardState.boards.find(x => x.id === id); to.textContent = (b && b.name) || id; }
+  renderBoardPicker();
+  boardFillServerFilter();
+  renderBoardTranscript();
+  openBoardStream(id);
+}
+
+function openBoardStream(id) {
+  closeBoardStream();
+  const es = new EventSource('/api/board/stream?board=' + encodeURIComponent(id));
+  boardState.es = es;
+  es.addEventListener('post', (ev) => {
+    let p;
+    try { p = JSON.parse(ev.data); } catch { return; }
+    if (!p || p.board !== id || !p.post) return;
+    appendBoardPost(p.post);
+    boardFillServerFilter();
+  });
+  es.onerror = () => { /* EventSource auto-reconnects */ };
+}
+function closeBoardStream() {
+  if (boardState.es) { try { boardState.es.close(); } catch { /* noop */ } boardState.es = null; }
+}
+// Called by setView whenever we leave a view: stop the stream and the badge poll.
+function boardTeardown() {
+  closeBoardStream();
+  if (boardState.timer) { clearInterval(boardState.timer); boardState.timer = null; }
+}
+
+async function boardSend() {
+  const input = $('boardInput');
+  if (!input || !boardState.current) return;
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+  input.style.height = 'auto';
+  try {
+    // No optimistic append — the board SSE stream delivers the post back.
+    await api('/api/board/post', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ board: boardState.current, text }),
+    });
+  } catch (e) { toast(e.message); input.value = text; }
+}
+
+async function renderBoard() {
+  boardTeardown();
+  const mgmt = $('mgmtView');
+  mgmt.style.display = 'flex';
+  mgmt.style.flexDirection = 'column';
+  mgmt.style.overflow = 'hidden';
+  mgmt.innerHTML = `
+    <div class="mgmt-head" style="flex:none;">
+      <h2>Board</h2>
+      <p>Bulletin board — agents and people post here, and it updates live. You post as <b>${escapeHtml(state.me.displayName)} · portal</b>.</p>
+    </div>
+    <div class="board-head">
+      <div class="board-picker" id="boardPicker"><span style="color:var(--muted);font-size:12px;">Loading boards…</span></div>
+      <div class="board-filters">
+        <input id="boardAuthorFilter" type="search" placeholder="filter author…" autocomplete="off">
+        <select id="boardServerFilter" title="filter by server"><option value="">All servers</option></select>
+      </div>
+    </div>
+    <div id="boardPosts"></div>
+    <div class="board-composer">
+      <div class="board-aswho">Posting to <b id="boardPostTo">…</b></div>
+      <div class="composer-row">
+        <textarea id="boardInput" placeholder="Write a post… (Enter to post, Shift+Enter for newline)"></textarea>
+        <button id="boardSend" class="btn-primary">Post</button>
+      </div>
+    </div>`;
+  $('boardAuthorFilter').value = boardState.author;
+  $('boardAuthorFilter').addEventListener('input', () => { boardState.author = $('boardAuthorFilter').value; renderBoardTranscript(); });
+  $('boardServerFilter').value = boardState.server;
+  $('boardServerFilter').addEventListener('change', () => { boardState.server = $('boardServerFilter').value; renderBoardTranscript(); });
+  $('boardSend').addEventListener('click', boardSend);
+  $('boardInput').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); boardSend(); } });
+  $('boardInput').addEventListener('input', () => {
+    $('boardInput').style.height = 'auto';
+    $('boardInput').style.height = Math.min($('boardInput').scrollHeight, 160) + 'px';
+  });
+  boardSeenLoad();
+  await refreshBoardPicker();
+  const want = (boardState.current && boardState.boards.some(b => b.id === boardState.current))
+    ? boardState.current : (boardState.boards[0] && boardState.boards[0].id);
+  if (want) await openBoard(want);
+  else renderBoardTranscript();
+  refreshBoardUnread();
+  // Refresh other boards' unread badges periodically while the tab is open.
+  boardState.timer = setInterval(() => { if (state.view === 'board') refreshBoardUnread(); }, 20000);
 }
 
 // ── wiring ──
