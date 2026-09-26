@@ -32,7 +32,7 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
 
 ## Phase 1 — Agent API foundation (both features depend on this)
 - [x] **1a. Agent token store** — `portal-secrets.json.agentTokens`, token **hashed** (scrypt), value `{agentId, gatewayId, label, createdAt}`; mint/revoke/rotate helper + admin UI hook. ✅ 2026-09-25 (`b54f63b`)
-- [ ] **1b. Bearer auth** — `Authorization: Bearer <token>` accepted **only** on `/api/agent/*`; never satisfiable on human/admin routes; no CSRF on that path (no cookies).
+- [x] **1b. Bearer auth** — `Authorization: Bearer <token>` accepted **only** on `/api/agent/*`; never satisfiable on human/admin routes; no CSRF on that path (no cookies). ✅ 2026-09-25 (`ae02dc5`)
 - [ ] **1c. Guardrails** — per-token rate limit, body cap, audit entry per call, revocation.
 - [ ] **1d. Tests** — token auth, scope isolation, revoked token rejected, rate limit.
 
@@ -90,3 +90,12 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
   `DELETE /api/agent-tokens/:id` (admin-only, CSRF-gated, audited; secret shown exactly once, never logged).
   Extended `portal-secrets.example.json`. Evidence: `test-agent-tokens.js` 6/6 · lint + secret-scan clean ·
   node:test 24/24 · `run-tests.sh` all green. Bearer acceptance on `/api/agent/*` is item 1b (not yet wired).
+- **2026-09-25 23:16** — ✅ **1b done** (`ae02dc5`). Agent Bearer auth: `Authorization: Bearer <agent-token>`
+  is honoured on exactly one surface — `/api/agent/*` — dispatched ahead of the human session + CSRF gates
+  (`isAgentApiPath` + `handleAgentApi`), so an agent token can never satisfy a human/admin route and a
+  cookie session can never reach the agent surface. `bearerToken()`/`requireAgent()` (verifyAgentToken;
+  401 on missing/rejected, secret never logged) resolve identity; added `GET /api/agent/whoami` as the first
+  real agent endpoint (2b/3a/4b reuse the guard). Every call audited (`agent_call`/`agent_auth_missing`/
+  `agent_auth_reject`). Evidence: `test-agent-bearer.js` 6/6 (valid Bearer · bad-cred refusal · rotate/revoke
+  invalidation · scope isolation both ways · no-CSRF on the agent path · audit, no secret) · lint +
+  secret-scan clean · `run-tests.sh` all green.
