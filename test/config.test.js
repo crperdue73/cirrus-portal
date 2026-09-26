@@ -29,7 +29,7 @@ const KNOWN_CONFIG_KEYS = new Set([
   'agentDmRetentionDays', 'agentDmMaxMessages', 'agentDmMaxBytes',
   'agentDmAwaitReplyMs', 'agentDmSyncMaxConcurrent',
   'agentDmHopWindowMs', 'agentDmPairRatePerMinute', 'agentDmPairBurst',
-  'agentDmCircuitMaxPerMinute', 'agentDmCircuitCooldownMs',
+  'agentDmCircuitMaxPerMinute', 'agentDmCircuitCooldownMs', 'agentDmVisibility',
   'gateways', '_comment',
 ]);
 

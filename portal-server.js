@@ -128,6 +128,12 @@ const DEFAULTS = {
   agentDmPairBurst: 15,              // extra allowance above the steady per-pair rate
   agentDmCircuitMaxPerMinute: 300,   // fleet-wide DM budget; exceeding it opens the circuit
   agentDmCircuitCooldownMs: 60000,   // how long the circuit stays open once tripped
+  // Agent DM privacy (plan item 4e) — DMs are PRIVATE by default: an admin can
+  // see that a DM happened (who / when / state) but NOT its body. Set to
+  // 'visible' to let admins read DM bodies too. The live value is persisted in
+  // the DM store (a runtime admin flip survives restart); this config key only
+  // seeds a fresh store and is the fallback (see dmVisibility()).
+  agentDmVisibility: 'private',
   // Board notify (plan item 2e) — @agent mention-wake is OPT-IN and off by
   // default. The v1 notify path is PULL (a per-identity unread cursor an agent
   // reads on its heartbeat); the wake push stays dark until the operator turns
@@ -301,6 +307,7 @@ function loadConfig() {
     PORTAL_AGENT_DM_PAIR_BURST: 'agentDmPairBurst',
     PORTAL_AGENT_DM_CIRCUIT_MAX_PER_MINUTE: 'agentDmCircuitMaxPerMinute',
     PORTAL_AGENT_DM_CIRCUIT_COOLDOWN_MS: 'agentDmCircuitCooldownMs',
+    PORTAL_AGENT_DM_VISIBILITY: 'agentDmVisibility',
   };
   for (const [envKey, cfgKey] of Object.entries(envMap)) {
     if (process.env[envKey] !== undefined) {
@@ -718,7 +725,10 @@ async function handleAgentApi(req, res, url) {
       return json(res, 405, { error: 'method not allowed' });
     }
     audit('agent_call', rec.agentId, 'agent', callDetail);
-    return json(res, 200, { ok: true, agent: ident });
+    const vinfo = dmVisibilityInfo();
+    // Tell the agent the current DM privacy policy (plan item 4e) so it knows
+    // whether its DMs are admin-visible before it sends one.
+    return json(res, 200, { ok: true, agent: ident, dmVisibility: vinfo.visibility, dmVisibilityNote: vinfo.note });
   }
 
   // Bulletin-board surface for agents (plan item 2b): the SAME read/post core
@@ -846,9 +856,11 @@ async function handleAgentApi(req, res, url) {
     const dmStatus = r.error ? (r.status || 400) : (r.sync ? 200 : 202);
     audit('agent_call', rec.agentId, 'agent', { ...callDetail, status: dmStatus });
     if (r.error) return json(res, r.status || 400, { error: r.error });
-    // Sync (4c): 200 with the held reply inline; async: 202 accepted.
-    if (r.sync) return json(res, 200, { ok: true, dm: r.dm, timedOut: !!r.timedOut });
-    return json(res, 202, { ok: true, dm: r.dm });
+    // Sync (4c): 200 with the held reply inline; async: 202 accepted. Either
+    // way the caller is told the current DM privacy policy (plan item 4e).
+    const vinfo = dmVisibilityInfo();
+    if (r.sync) return json(res, 200, { ok: true, dm: r.dm, timedOut: !!r.timedOut, ...vinfo });
+    return json(res, 202, { ok: true, dm: r.dm, ...vinfo });
   }
 
   // Cross-server agent DM — mailbox READ (plan item 4b). The caller's OWN DMs
@@ -860,7 +872,7 @@ async function handleAgentApi(req, res, url) {
     const r = dmRead({ since: url.searchParams.get('since') || '', limit: url.searchParams.get('limit') }, ident);
     audit('agent_call', rec.agentId, 'agent', { ...callDetail, status: 200 });
     audit('agent_dm_read', rec.agentId, 'agent', { token: rec.id, count: r.dms.length, total: r.count });
-    return json(res, 200, { ok: true, you: ident.ref, ...r });
+    return json(res, 200, { ok: true, you: ident.ref, ...dmVisibilityInfo(), ...r });
   }
 
   audit('agent_call', rec.agentId, 'agent', { ...callDetail, status: 404 });
@@ -2839,6 +2851,80 @@ function dmRetentionDays() { return Math.max(0, Number(CONFIG.agentDmRetentionDa
 function dmMaxMessages() { return Math.max(DM_KEEP_MIN, Number(CONFIG.agentDmMaxMessages) || 5000); }
 function dmMaxBytes() { return Math.max(64 * 1024, Number(CONFIG.agentDmMaxBytes) || 4 * 1024 * 1024); }
 
+// ── Agent DM privacy (plan item 4e) ─────────────────────────────────────────
+// Agent DMs are PRIVATE by default: the mailbox holds the bodies, but only the
+// two parties may read them. An admin (and the Agent DM tab, item 4f) sees that
+// a DM happened — from, to, when, state — but the body is stripped HERE, on the
+// server, so no client (or log) ever receives it. One switch, `agentDmVisibility`,
+// flips the policy to 'visible' (admins may read bodies); the flip is audited,
+// and every agent is told the current policy (whoami + the DM send/read replies).
+// The live value is persisted in the DM store (0600) so an admin flip survives a
+// restart; the config key seeds a fresh store and is the fallback.
+const DM_VISIBILITIES = ['private', 'visible'];
+function dmVisibilityParse(v) {
+  const s = String(v == null ? '' : v).trim().toLowerCase();
+  if (s === 'visible' || s === 'transparent' || s === 'admin' || s === 'on' || s === 'true' || s === '1') return 'visible';
+  if (s === 'private' || s === 'hidden' || s === 'off' || s === 'false' || s === '0') return 'private';
+  return null;
+}
+// The effective policy. DM.visibility is concrete once the store loads; the
+// config value is the fallback (and the seed for a fresh store).
+function dmVisibility() {
+  return dmVisibilityParse(DM && DM.visibility) || dmVisibilityParse(CONFIG.agentDmVisibility) || 'private';
+}
+// What an agent is told about the current policy — value + a plain-language note.
+function dmVisibilityInfo() {
+  const visibility = dmVisibility();
+  return {
+    visibility,
+    note: visibility === 'visible'
+      ? 'Agent DMs are visible to portal admins (bodies included).'
+      : 'Agent DMs are private: bodies are hidden from portal admins; only the sender and recipient can read them.',
+  };
+}
+// Flip the policy and persist it. Returns { from, to, changed } or { error }.
+function dmSetVisibility(v) {
+  const next = dmVisibilityParse(v);
+  if (!next) return { error: `visibility must be one of: ${DM_VISIBILITIES.join(', ')}` };
+  const from = dmVisibility();
+  if (next === from) return { from, to: next, changed: false };
+  DM.visibility = next;
+  saveDmStore();
+  return { from, to: next, changed: true };
+}
+// The admin-facing view of one DM: metadata always; the bodies ONLY when the
+// policy is 'visible'. In private mode the body never leaves the server.
+function dmAdminView(dm) {
+  const vis = dmVisibility();
+  const out = {
+    id: dm.id, from: dm.from, to: dm.to, toGateway: dm.toGateway, toAgent: dm.toAgent,
+    ts: dm.ts, state: dm.state, hops: dm.hops, awaitReply: dm.awaitReply, noRelay: dm.noRelay,
+    replyTs: dm.replyTs || 0, deliveredTs: dm.deliveredTs || 0,
+  };
+  if (vis === 'visible') {
+    out.text = dm.text; out.reply = dm.reply;
+  } else {
+    out.redacted = true; out.text = null; out.reply = null;
+    out.textLength = dm.text ? dm.text.length : 0; // size hint only — not content
+  }
+  return out;
+}
+// Admin read across EVERY DM (not caller-scoped): the Agent DM tab's feed. Same
+// since/limit shape as the party-scoped read, then each record is passed through
+// dmAdminView so the privacy policy is enforced uniformly for every caller.
+function dmAdminRead({ since, limit } = {}) {
+  const all = DM.dms;
+  let dms;
+  if (since) {
+    const i = all.findIndex(d => d.id === since);
+    dms = i === -1 ? all.slice(-dmLimit(limit)) : all.slice(i + 1);
+  } else {
+    dms = all.slice(-dmLimit(limit));
+  }
+  const cursor = dms.length ? dms[dms.length - 1].id : (since || null);
+  return { dms: dms.map(dmAdminView), cursor, count: all.length };
+}
+
 // Sync-reply wait window (plan item 4c). A `awaitReply:true` DM holds its HTTP
 // response until the recipient's run emits its assistant message (matched by
 // runId across ALL sessions, exactly like a room round) or this budget elapses
@@ -3014,18 +3100,23 @@ function normalizeDm(d) {
 }
 
 function loadDmStore() {
-  const store = { dms: [] };
+  // Seed the policy from config; a value already in the file (a runtime flip)
+  // wins, so an admin toggle survives a restart.
+  const store = { dms: [], visibility: dmVisibilityParse(CONFIG.agentDmVisibility) || 'private' };
   try {
     const raw = JSON.parse(fs.readFileSync(DM_PATH, 'utf8'));
     if (raw && Array.isArray(raw.dms)) store.dms = raw.dms.map(normalizeDm).filter(Boolean);
+    const vis = dmVisibilityParse(raw && raw.visibility);
+    if (vis) store.visibility = vis;
   } catch { /* first run (ENOENT) or a corrupt file — fall back to empty */ }
   return store;
 }
 
-// Persist the store 0600 (read-only-rootfs-safe writer, plan item 8).
+// Persist the store 0600 (read-only-rootfs-safe writer, plan item 8). The
+// privacy policy travels with the mail it governs.
 function saveDmStore() {
   try {
-    const data = JSON.stringify({ dms: DM.dms.slice(-dmMaxMessages()) }, null, 2);
+    const data = JSON.stringify({ visibility: dmVisibility(), dms: DM.dms.slice(-dmMaxMessages()) }, null, 2);
     writeFileRobust(DM_PATH, data, 0o600);
   } catch (e) {
     console.error('[portal] failed to write agent-dm file:', e.message);
@@ -3850,6 +3941,7 @@ const METRICS = {
   agentDmRateLimited: 0,
   agentDmCircuitOpen: 0,
   agentDmRelayBlocked: 0,
+  agentDmVisibilityFlips: 0,
 };
 
 // One structured log line. `logFormat:"json"` (the default) emits a JSON object
@@ -3970,6 +4062,8 @@ function metrics(res, req) {
   metric('cirrus_portal_agent_dm_rate_limited_total', 'counter', 'Agent DMs refused by the per-pair rate limit.', [`cirrus_portal_agent_dm_rate_limited_total ${METRICS.agentDmRateLimited}`]);
   metric('cirrus_portal_agent_dm_circuit_open_total', 'counter', 'Agent DMs refused because the fleet circuit breaker was open.', [`cirrus_portal_agent_dm_circuit_open_total ${METRICS.agentDmCircuitOpen}`]);
   metric('cirrus_portal_agent_dm_relay_blocked_total', 'counter', 'Agent DMs refused because the most recent inbound was marked no-relay.', [`cirrus_portal_agent_dm_relay_blocked_total ${METRICS.agentDmRelayBlocked}`]);
+  metric('cirrus_portal_agent_dm_visibility_changes_total', 'counter', 'Admin flips of the agent-DM privacy policy since start.', [`cirrus_portal_agent_dm_visibility_changes_total ${METRICS.agentDmVisibilityFlips}`]);
+  metric('cirrus_portal_agent_dm_bodies_visible', 'gauge', 'Whether agent-DM bodies are visible to admins (1) or private (0).', [`cirrus_portal_agent_dm_bodies_visible ${dmVisibility() === 'visible' ? 1 : 0}`]);
   metric('cirrus_portal_audit_entries', 'gauge', 'Lines currently in the audit log.', [`cirrus_portal_audit_entries ${auditLineCount()}`]);
   res.writeHead(200, { 'Content-Type': 'text/plain; version=0.0.4; charset=utf-8' });
   res.end(L.join('\n') + '\n');
@@ -4759,6 +4853,34 @@ async function handleApi(req, res, url) {
     if (r.error) return json(res, 404, { error: r.error });
     audit('agent_token_revoke', user.username, user.role, { id, agentId: r.record.agentId, gatewayId: r.record.gatewayId });
     return json(res, 200, { ok: true });
+  }
+
+  // ── Agent DM privacy (plan item 4e) ───────────────────────────────────
+  // Admin-only feed of the cross-server DM traffic with the privacy policy
+  // applied SERVER-SIDE: metadata always; message bodies only when the policy
+  // is 'visible'. A read (GET) needs no CSRF; the policy flip (POST) is
+  // state-changing and already covered by the CSRF gate above.
+  if (p === '/api/agent-dms' && req.method === 'GET') {
+    if (!requireRole(user, 'admin')) return json(res, 403, { error: 'admins only' });
+    const vis = dmVisibilityInfo();
+    const r = dmAdminRead({ since: url.searchParams.get('since') || '', limit: url.searchParams.get('limit') });
+    // Audit the admin read (count + whether bodies were redacted) — never a body.
+    audit('agent_dm_admin_read', user.username, user.role, { count: r.dms.length, total: r.count, visibility: vis.visibility, redacted: vis.visibility !== 'visible' });
+    return json(res, 200, { ok: true, ...vis, ...r });
+  }
+
+  if (p === '/api/agent-dms/visibility' && req.method === 'POST') {
+    if (!requireRole(user, 'admin')) return json(res, 403, { error: 'admins only' });
+    const body = await readBody(req);
+    if (!body || body.visibility == null) return json(res, 400, { error: 'visibility required' });
+    const r = dmSetVisibility(body.visibility);
+    if (r.error) return json(res, 400, { error: r.error });
+    // The flip is audited with the old→new policy (never any DM content).
+    if (r.changed) {
+      METRICS.agentDmVisibilityFlips++;
+      audit('agent_dm_visibility', user.username, user.role, { from: r.from, to: r.to });
+    }
+    return json(res, 200, { ok: true, visibility: r.to, changed: r.changed });
   }
 
   // ── Gateway management (admin: Gateways view, Aug 2026) ───────────────

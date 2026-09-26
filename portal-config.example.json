@@ -42,5 +42,6 @@
   "agentDmPairRatePerMinute": 30,
   "agentDmPairBurst": 15,
   "agentDmCircuitMaxPerMinute": 300,
-  "agentDmCircuitCooldownMs": 60000
+  "agentDmCircuitCooldownMs": 60000,
+  "agentDmVisibility": "private"
 }
