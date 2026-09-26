@@ -51,7 +51,7 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
 ## Phase 4 — Cross-server agent DM
 - [x] **4a. Mailbox store** — `portal-agent-dm.json` (0600): id, from, to, text, ts, state, reply, hops, awaitReply. ✅ 2026-09-26 (`eb93baf`)
 - [x] **4b. Routing** — resolve target gateway → `chat.send` into `agent:<id>:main`. Same code path for local and remote. ✅ 2026-09-26 (`8ea894d`)
-- [ ] **4c. Sync reply** — `awaitReply:true` returns the recipient's next assistant message (reuse `state:final` + `runId` watcher).
+- [x] **4c. Sync reply** — `awaitReply:true` returns the recipient's next assistant message (reuse `state:final` + `runId` watcher). ✅ 2026-09-26 (`b4c898e`)
 - [ ] **4d. Loop safety** — hop counter (max 3), per-pair rate limit, burst budget, no-relay flag, circuit breaker.
 - [ ] **4e. Privacy** — content hidden from admin by default, server-side; `agentDmVisibility` switch; **agents are told** the current visibility and the flip is audited.
 - [ ] **4f. Agent DM tab UI** — live traffic, per-pair threads, delivery/reply state.
@@ -307,3 +307,24 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
   empty body 400 · 0600 persist) · `node --check` · node:test **24/24** · `run-tests.sh` all green · lint +
   secret-scan clean. No config keys added (no drift). Preview `portal-preview` untouched — 4b has no user-visible
   UI surface (the Agent DM tab is 4f), so no restart was needed this run. Next: 4c (sync `awaitReply`).
+- **2026-09-26 12:16** — ✅ **4c done** (`b4c898e`). Cross-server DM **sync reply**. `awaitReply:true`
+  now holds the HTTP response (200 `{dm,timedOut}`) and returns the recipient's next assistant
+  message on `dm.reply` (state:replied`), replacing the 4b 501 stub. The hold reuses the room
+  engine's `state:final` + `runId` watcher — `awaitAgentReply` matched across ALL sessions so a
+  channel-bound agent's reply still lands — plus `historyFallbackReply` for a busy/queued session
+  that acks a runId which isn't the one that answers; both run inside ONE bounded budget
+  (`agentDmAwaitReplyMs`, default 120s, clamped 5s–300s). A no-reply hold returns
+  `{timedOut:true}` and leaves the DM `state:delivered` rather than failing the call. Added a coarse
+  concurrent-hold cap (`agentDmSyncMaxConcurrent`, default 20) that refuses extra sync holds
+  **429 + Retry-After** so a fleet of blocking callers can't exhaust the portal (the fine-grained
+  per-pair rate/burst/circuit breaker is 4d). Privacy preserved: bodies never reach the audit log
+  (only ids/state/flags: `sync`/`replied`/`timedOut`); added the `cirrus_portal_agent_dm_replies_total`
+  metric + both config keys (DEFAULTS + `PORTAL_AGENT_DM_*` env + example + `test/config.test.js`
+  drift guard). Updated the 4b test's obsolete "awaitReply → 501" case to the now-live timedOut path.
+  Evidence: `test-agent-dm-sync.js` **9/9** (Bearer-only · reply lands 200 replied · no-reply
+  `timedOut` → stays delivered (waited ~6s ≈ budget) · concurrent-hold cap 429+Retry-After+no write ·
+  history-fallback recovery · async 202 regression · no body/token in audit · 0600 persist w/ reply +
+  awaitReply · replies metric) · test-agent-dm-route **10/10** · test-agent-dm-store 6/6 · test/config
+  4/4 · `node --check` · node:test **24/24** · lint + secret-scan clean · `run-tests.sh` all green.
+  No `portal.html` change (the Agent DM tab is 4f) — preview `portal-preview` untouched, no restart
+  needed. Next: 4d (loop safety — hop counter, per-pair rate, burst budget, no-relay, circuit breaker).
