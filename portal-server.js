@@ -540,6 +540,72 @@ function verifyAgentToken(secret) {
   return null;
 }
 
+// ── Agent API: Bearer auth (plan item 1b) ───────────────────────────────────
+// Agents are non-browser callers, so they authenticate with
+//   Authorization: Bearer <agent-token>
+// and that credential is honoured on EXACTLY one surface: /api/agent/*.
+// It can never satisfy a human/admin route — those resolve a session cookie
+// and ignore Authorization entirely. This surface is bearer-only: a session
+// cookie alone does NOT reach it, and no CSRF token is required (there is no
+// browser session here, so there is no ambient authority to forge).
+function isAgentApiPath(p) { return p === '/api/agent' || p.startsWith('/api/agent/'); }
+
+// Pull the Bearer secret out of an Authorization header (case-insensitive
+// scheme). Returns null when the header is absent or is not a Bearer credential.
+function bearerToken(req) {
+  const h = req.headers.authorization;
+  if (typeof h !== 'string') return null;
+  const m = /^Bearer[ ]+(.+)$/i.exec(h.trim());
+  return m ? m[1].trim() : null;
+}
+
+// Resolve the agent identity for an /api/agent/* request. On failure it writes
+// the 401 and returns null — the presented secret is never logged or echoed.
+// On success it returns the raw token record; callers project identity (never
+// the salt/hash/lookup) via publicAgentToken().
+function requireAgent(req, res) {
+  const path = String(req.url || '').split('?')[0];
+  const secret = bearerToken(req);
+  if (!secret) {
+    audit('agent_auth_missing', null, 'anon', { path });
+    json(res, 401, { error: 'agent bearer token required' });
+    return null;
+  }
+  const rec = verifyAgentToken(secret);
+  if (!rec) {
+    audit('agent_auth_reject', null, 'anon', { path });
+    json(res, 401, { error: 'invalid or revoked agent token' });
+    return null;
+  }
+  return rec;
+}
+
+// The agent-facing API. Everything under /api/agent/* lands here, ahead of the
+// human session + CSRF gates — so an agent token can never reach a human route,
+// and this surface never sees a cookie session. Each call is audited (item 1c
+// layers per-token rate limits, body caps, and revocation on top).
+async function handleAgentApi(req, res, url) {
+  const p = url.pathname;
+  const rec = requireAgent(req, res);
+  if (!rec) return; // 401 already sent
+
+  const ident = { agentId: rec.agentId, gatewayId: rec.gatewayId || '', label: rec.label || '' };
+
+  // Identity probe: lets an agent (and the tests) confirm its own credential
+  // without touching any board/DM state. Handy for "am I wired up correctly?".
+  if (p === '/api/agent/whoami') {
+    if (req.method !== 'GET') {
+      audit('agent_call', rec.agentId, 'agent', { path: p, method: req.method, token: rec.id, status: 405 });
+      return json(res, 405, { error: 'method not allowed' });
+    }
+    audit('agent_call', rec.agentId, 'agent', { path: p, method: 'GET', token: rec.id });
+    return json(res, 200, { ok: true, agent: ident });
+  }
+
+  audit('agent_call', rec.agentId, 'agent', { path: p, method: req.method, token: rec.id, status: 404 });
+  return json(res, 404, { error: 'not found' });
+}
+
 // env var name for a gateway id, e.g. "lab" -> PORTAL_GATEWAY_TOKEN_LAB
 function gatewayTokenEnv(id) {
   return 'PORTAL_GATEWAY_TOKEN_' + String(id).toUpperCase().replace(/[^A-Z0-9]/g, '_');
@@ -2718,6 +2784,12 @@ async function handleApi(req, res, url) {
   if (SETUP_REQUIRED) {
     return json(res, 503, { error: 'setup required', setupRequired: true, setupUrl: '/setup' });
   }
+
+  // ── Agent API (plan item 1b) ──
+  // Async Bearer-token surface, /api/agent/* only. Handled ahead of the human
+  // session + CSRF gates below so an agent credential can never satisfy a
+  // human/admin route (and a cookie session can never reach this surface).
+  if (isAgentApiPath(p)) return handleAgentApi(req, res, url);
 
   // ── Public ──
   if (p === '/api/me') {
