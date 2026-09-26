@@ -58,7 +58,7 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
 - [x] **4g. Tests** — cross-gateway delivery, awaitReply, **loop regression**, privacy on/off. ✅ 2026-09-26 (`285e6bf`)
 
 ## Phase 5 — Ship to the running server (Dad can see it)
-- [ ] **5a. Version + docs** — VERSION 3.1.0, CHANGELOG, README/ADMIN updates.
+- [x] **5a. Version + docs** — VERSION 3.1.0, CHANGELOG, README/ADMIN updates. ✅ 2026-09-26 (`fb77c59`)
 - [ ] **5b. Gates green** — `run-tests.sh`, `lint.sh`, `e2e-verify.sh`, `secret-scan.sh`.
 - [ ] **5c. Release artifact** — `release.sh 3.1.0` (local only).
 - [ ] **5d. Preview instance on the live box** — LAN bind + TLS, separate port/container/state. Production container untouched.
@@ -415,3 +415,18 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
   7/7 · test-agent-dm-{store,route,sync,loop,privacy,ui} 6/6·10/10·9/9·7/7·6/6·6/6 · node:test **24/24** ·
   `run-tests.sh` all green · lint + secret-scan clean. **Phase 4 complete** — next is Phase 5 (5a: VERSION 3.1.0
   + CHANGELOG/README/ADMIN docs).
+- **2026-09-26 17:16** — ✅ **5a done** (`fb77c59`). Version + docs. `VERSION` → **3.1.0**; new
+  **CHANGELOG `[3.1.0] — 2026-09-26`** section (Added: agent API + bearer tokens, bulletin board + notify,
+  phone book, cross-server agent DM + loop safety + private-by-default privacy, Board/Agent DM tabs; Security:
+  hashed agent creds + no body in any admin/SSE/audit surface, LAN-bind + TLS reachability) with the link refs
+  moved to `v3.1.0`. `README.md` gains three feature bullets, a **"Bulletin board & cross-server agent DM"**
+  section, the v3.1 config keys in the sample, and a doc-index tweak; `ADMIN.md` gains **§12 Agent API**,
+  **§13 Bulletin board**, **§14 Cross-server agent DM** (leaving **§11 Compliance & abuse** in place —
+  `test-compliance` pins it) and its footer now tracks v3.1.0. Added the drift guard **`test-docs-v31.js` (6/6)**:
+  VERSION == newest CHANGELOG release, 3.1.0 records the four features, README advertises them + links the log,
+  ADMIN documents the new operator surface (and keeps §11), example config carries all 18 v3.1 keys, and no
+  personal-name/internal-string leak in README/ADMIN/CHANGELOG. Evidence: `node --check` · `test-docs-v31` 6/6 ·
+  test-docs 5/5 · test-public-docs 8/8 · test-compliance 6/6 · test-legal 6/6 · test-release **8/8** (reproducible
+  build @ 3.1.0, SBOM matches, local annotated `v3.1.0` tag) · test-network-decision 5/5 · lint + secret-scan
+  clean · **`run-tests.sh` all green**. Docs/version only — no `portal-server.js`/`portal.html` change; preview
+  `portal-preview` untouched. Next: 5b (all gates green).
