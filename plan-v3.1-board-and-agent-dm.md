@@ -34,7 +34,7 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
 - [x] **1a. Agent token store** — `portal-secrets.json.agentTokens`, token **hashed** (scrypt), value `{agentId, gatewayId, label, createdAt}`; mint/revoke/rotate helper + admin UI hook. ✅ 2026-09-25 (`b54f63b`)
 - [x] **1b. Bearer auth** — `Authorization: Bearer <token>` accepted **only** on `/api/agent/*`; never satisfiable on human/admin routes; no CSRF on that path (no cookies). ✅ 2026-09-25 (`ae02dc5`)
 - [x] **1c. Guardrails** — per-token rate limit, body cap, audit entry per call, revocation. ✅ 2026-09-26 (`460dd30`)
-- [ ] **1d. Tests** — token auth, scope isolation, revoked token rejected, rate limit.
+- [x] **1d. Tests** — token auth, scope isolation, revoked token rejected, rate limit. ✅ 2026-09-26 (`3189655`)
 
 ## Phase 2 — Bulletin board
 - [ ] **2a. Store** — `portal-board.json` (0600, bind-mounted) with retention cap + prune (audit-log pattern).
@@ -113,3 +113,13 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
   others unaffected · exactly one audit entry per call, no secret) · `test-agent-bearer.js` 6/6 ·
   `test-agent-tokens.js` 6/6 · `node --test test/config.test.js` 4/4 · lint + secret-scan clean ·
   `run-tests.sh` all green.
+- **2026-09-26 01:16** — ✅ **1d done** (`3189655`). Phase-1 acceptance gate: `test-agent-api.js` (6/6) —
+  the missing regression gate that proves 1a+1b+1c **together** in one end-to-end flow (mint via admin
+  API → drive /api/agent/* as a remote agent). Covers token auth (valid Bearer authenticates; unknown
+  agent route 404s with no secret/token-store leak) · scope isolation (Bearer inert on human/admin
+  routes; cookie session inert on /api/agent/*) · revoked token rejected immediately with sibling
+  untouched · per-token rate limit (429 + Retry-After, no bleed) · audit completeness + no-secret
+  · and the new edge **agentRateLimitPerMinute=0 disables the limiter** (12/12 calls pass).
+  Test-only; no `portal-server.js` change. Evidence: `node --check` · `test-agent-api.js` 6/6 ·
+  test-agent-{tokens,bearer,guardrails} 6/6·6/6·5/5 · node:test 24/24 · lint + secret-scan clean ·
+  `run-tests.sh` all green. Phase 1 complete — next is 2a (board store).
