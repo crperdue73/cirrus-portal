@@ -49,7 +49,7 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
 - [x] **3b. Tests** — merges gateways, marks offline servers, token-scoped. ✅ 2026-09-26 (`72fcc60`)
 
 ## Phase 4 — Cross-server agent DM
-- [ ] **4a. Mailbox store** — `portal-agent-dm.json` (0600): id, from, to, text, ts, state, reply, hops, awaitReply.
+- [x] **4a. Mailbox store** — `portal-agent-dm.json` (0600): id, from, to, text, ts, state, reply, hops, awaitReply. ✅ 2026-09-26 (`eb93baf`)
 - [ ] **4b. Routing** — resolve target gateway → `chat.send` into `agent:<id>:main`. Same code path for local and remote.
 - [ ] **4c. Sync reply** — `awaitReply:true` returns the recipient's next assistant message (reuse `state:final` + `runId` watcher).
 - [ ] **4d. Loop safety** — hop counter (max 3), per-pair rate limit, burst budget, no-relay flag, circuit breaker.
@@ -272,3 +272,20 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
   change. Evidence: `node --check` · `test-roster-gate.js` 6/6 · test-agent-roster 7/7 · node:test **24/24** ·
   `run-tests.sh` all green · lint + secret-scan clean. **Phase 3 complete** — next is Phase 4 (cross-server
   agent DM, 4a).
+- **2026-09-26 10:16** — ✅ **4a done** (`eb93baf`). Agent DM **mailbox store**: the durable
+  `portal-agent-dm.json` (0600, bind-mounted) holds every cross-server DM and its delivery state —
+  `{id, from, to, toGateway, toAgent, text, ts, state:queued|delivered|replied|failed, reply, replyTs,
+  deliveredTs, hops, awaitReply, error}`. Bounded on disk exactly like the board + audit log
+  (`agentDmRetentionDays` / `agentDmMaxMessages` / `agentDmMaxBytes` + `DM_KEEP_MIN` floor), but with an
+  **in-flight safety** rule the board doesn't need: age-pruning drops only **terminal** DMs (replied/failed),
+  and the hard caps drop the oldest **terminal** DMs before any in-flight (queued/delivered) one — so a busy
+  fleet can never silently lose a message that is still being delivered. Normalization is defensive:
+  a DM missing `from`/`to`/text is dropped, `state` is validated against the enum (bogus → queued), and
+  `hops` is clamped `0..DM_HOPS_MAX` (**3** — the 4d loop bound) so a corrupt file or hostile caller can't
+  wedge the loop counter. Wired the three keys into DEFAULTS + `PORTAL_AGENT_DM_*` env + the example config
+  (+ `test/config.test.js` drift guard), and added `.gitignore` entries + `secret-scan.sh` guards for
+  `portal-agent-dm.json` — and, as a small drive-by correctness fix, the previously-unlisted
+  `portal-board.json`. No HTTP surface yet — the router lands in 4b. Evidence: `test-agent-dm-store.js`
+  **6/6** (first-boot 0600 empty · normalize/clamp · age-prune spares in-flight · cap drops terminal
+  first · maxBytes trims to floor · env override) · `node --check` · test/config 4/4 · lint + secret-scan
+  clean · `run-tests.sh` all green. Next: 4b (routing → cross-server `chat.send`).
