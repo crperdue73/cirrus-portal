@@ -471,6 +471,52 @@
   .board-composer .composer-row { gap: 8px; }
   .board-aswho { font-size: 11px; color: var(--muted); margin-bottom: 6px; }
 
+  /* ── Agent DM view (plan item 4f) ── */
+  .dm-bar { display: flex; align-items: center; gap: 12px; padding: 2px 0 12px; border-bottom: 1px solid var(--line); margin-bottom: 10px; flex-wrap: wrap; }
+  .dm-policy { font-size: 12.5px; color: var(--muted); flex: 1; min-width: 0; }
+  .dm-policy b { color: var(--text); }
+  .dm-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+  .dm-dot.on { background: var(--ok); }
+  .dm-dot.off { background: var(--err); }
+  .dm-bar-actions { display: flex; gap: 6px; align-items: center; flex: none; }
+  .dm-bar-actions input {
+    background: var(--panel2); border: 1px solid var(--line); color: var(--text);
+    border-radius: 8px; padding: 5px 8px; font-size: 12px; min-width: 0;
+  }
+  .dm-bar-actions input:focus { outline: none; border-color: rgba(0,212,232,.5); }
+  .dm-bar-actions button.danger { background: var(--err); }
+  .dm-body { flex: 1; display: flex; gap: 12px; min-height: 0; }
+  .dm-pairs { width: 250px; flex: none; overflow-y: auto; border-right: 1px solid var(--line); padding-right: 10px; }
+  .dm-pair {
+    display: block; width: 100%; text-align: left; cursor: pointer; margin-bottom: 6px;
+    border: 1px solid var(--line); background: var(--panel2); color: var(--text);
+    border-radius: 10px; padding: 8px 10px; font-family: inherit;
+  }
+  .dm-pair:hover { border-color: rgba(0,212,232,.4); }
+  .dm-pair.active { border-color: rgba(0,212,232,.5); background: rgba(0,212,232,.08); }
+  .dm-pair-title { font-size: 12px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dm-pair-sub { font-size: 10.5px; color: var(--muted); margin-top: 2px; }
+  .dm-thread { flex: 1; overflow-y: auto; padding: 4px 4px 12px; min-width: 0; }
+  .dm-thread-head { font-size: 12px; font-weight: 700; color: var(--muted); margin-bottom: 10px; position: sticky; top: 0; background: var(--bg); padding: 4px 0; }
+  .dm-msg { margin-bottom: 14px; }
+  .dm-msg .meta { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 4px; }
+  .dm-msg .route { font-size: 12.5px; font-weight: 700; }
+  .dm-msg .when { font-size: 10.5px; color: var(--muted); }
+  .dm-chip { font-size: 10px; color: var(--slate); background: rgba(115,163,200,.12); border: 1px solid rgba(115,163,200,.3); padding: 0 6px; border-radius: 10px; }
+  .dm-chip.warn { color: var(--err); border-color: rgba(248,113,113,.4); background: rgba(248,113,113,.1); }
+  .dm-state { font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; padding: 1px 7px; border-radius: 10px; border: 1px solid var(--line); color: var(--muted); }
+  .dm-state.delivered { color: var(--slate); border-color: rgba(115,163,200,.5); }
+  .dm-state.replied { color: var(--ok); border-color: rgba(52,211,153,.5); }
+  .dm-state.failed { color: var(--err); border-color: rgba(248,113,113,.5); }
+  .dm-msg .body {
+    display: inline-block; max-width: 780px; padding: 9px 13px; border-radius: 10px;
+    background: var(--panel2); border: 1px solid var(--line); font-size: 14px; line-height: 1.5;
+    white-space: pre-wrap; word-break: break-word;
+  }
+  .dm-msg .body.redacted { color: var(--muted); font-style: italic; }
+  .dm-msg .body.reply { margin-top: 6px; border-color: rgba(52,211,153,.35); background: rgba(52,211,153,.06); }
+  .dm-empty-mini { color: var(--muted); font-size: 12px; }
+
   /* ── context strip (CI30) ── */
   #ctxStrip {
     border-bottom: 1px solid var(--line);
@@ -767,6 +813,9 @@ function buildNav() {
   if (m.role === 'admin') {
     items.push({ key: 'users', label: 'Users' });
     items.push({ key: 'gateways', label: 'Gateways' });
+    // Agent DM is admin-only: it observes the whole cross-server DM feed, which
+    // the privacy policy hides from everyone but the two parties (plan item 4f).
+    items.push({ key: 'agentdm', label: 'Agent DM' });
     items.push({ key: 'audit', label: 'Audit' });
   }
   if (m.role === 'instructor') {
@@ -796,6 +845,7 @@ function setView(view) {
   document.querySelectorAll('.nav button').forEach(b => b.classList.toggle('active', b.dataset.view === view));
   closeStream();
   boardTeardown();
+  dmTeardown();
   const chat = $('chatView');
   const mgmt = $('mgmtView');
   if (view === 'agents') {
@@ -817,6 +867,7 @@ function setView(view) {
     else if (view === 'students') renderStudents();
     else if (view === 'rooms') renderRooms();
     else if (view === 'board') renderBoard();
+    else if (view === 'agentdm') renderAgentDm();
   }
 }
 
@@ -2529,6 +2580,247 @@ async function renderBoard() {
   refreshBoardUnread();
   // Refresh other boards' unread badges periodically while the tab is open.
   boardState.timer = setInterval(() => { if (state.view === 'board') refreshBoardUnread(); }, 20000);
+}
+
+// ── Agent DM view (plan item 4f) ──
+// The Agent DM tab shows the cross-server DM traffic the portal routes. It is
+// admin-only (the whole feed is admin-only) and privacy-aware: the server sends
+// bodies ONLY when the policy is 'visible' (otherwise a `redacted` flag + a
+// length hint). So the tab renders whatever the server hands it and never the
+// inverse — privacy is enforced server-side, and the switch here just flips the
+// policy (audited). Live traffic arrives on an SSE feed (`/api/agent-dms/stream`)
+// with a 20s poll as a safety net; the view is a per-pair picker + transcript.
+const dmState = {
+  dms: [],          // every DM the admin feed has returned, oldest→newest
+  current: null,    // pair key currently open
+  es: null,         // EventSource for the live feed
+  visible: 'private',
+  note: '',
+  filter: '',       // agent substring filter for the pair picker
+  count: 0,         // server-side total (may exceed what we hold)
+  timer: null,      // poll-refresh interval while the view is open
+};
+const DM_PAIR_SEP = '\u0001';
+function dmPairKey(a, b) { return [String(a || '?'), String(b || '?')].sort().join(DM_PAIR_SEP); }
+function dmPairParts(key) { const p = String(key || '').split(DM_PAIR_SEP); return { a: p[0] || '?', b: p[1] || '?' }; }
+
+function dmRenderPolicy() {
+  const el = $('dmPolicy');
+  const btn = $('dmVisibilityBtn');
+  const visible = dmState.visible === 'visible';
+  if (el) {
+    el.innerHTML = visible
+      ? '<span class="dm-dot on"></span> Bodies <b>visible</b> to admins'
+      : '<span class="dm-dot off"></span> Bodies <b>private</b> — hidden from admins';
+    if (dmState.note) el.title = dmState.note;
+  }
+  if (btn) {
+    btn.textContent = visible ? 'Switch to private' : 'Reveal bodies';
+    btn.classList.toggle('danger', visible);
+  }
+}
+
+function dmPairs() {
+  const map = new Map();
+  const f = dmState.filter.trim().toLowerCase();
+  for (const dm of dmState.dms) {
+    const from = String(dm.from || ''), to = String(dm.to || '');
+    if (f && !from.toLowerCase().includes(f) && !to.toLowerCase().includes(f)) continue;
+    const key = dmPairKey(from, to);
+    let p = map.get(key);
+    if (!p) { p = { key, a: from, b: to, count: 0, last: dm }; map.set(key, p); }
+    p.count++;
+    if ((dm.ts || 0) >= (p.last.ts || 0)) p.last = dm;
+  }
+  return Array.from(map.values()).sort((x, y) => (y.last.ts || 0) - (x.last.ts || 0));
+}
+function dmMessagesFor(key) { return dmState.dms.filter((dm) => dmPairKey(dm.from, dm.to) === key); }
+
+function dmRenderPairs() {
+  const box = $('dmPairs');
+  if (!box) return;
+  const pairs = dmPairs();
+  if (!pairs.length) {
+    dmState.current = null;
+    box.innerHTML = '<span class="dm-empty-mini">No agent DMs yet.</span>';
+    return;
+  }
+  if (!dmState.current || !pairs.some((p) => p.key === dmState.current)) dmState.current = pairs[0].key;
+  box.innerHTML = '';
+  for (const p of pairs) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'dm-pair' + (p.key === dmState.current ? ' active' : '');
+    const title = document.createElement('div');
+    title.className = 'dm-pair-title';
+    title.textContent = p.a + ' \u2194 ' + p.b;
+    btn.appendChild(title);
+    const sub = document.createElement('div');
+    sub.className = 'dm-pair-sub';
+    sub.textContent = p.count + ' msg' + (p.count === 1 ? '' : 's') + ' \u00b7 ' + (p.last.state || '');
+    btn.appendChild(sub);
+    btn.addEventListener('click', () => { dmState.current = p.key; dmRenderPairs(); dmRenderThread(); });
+    box.appendChild(btn);
+  }
+}
+
+function dmBubble(dm) {
+  const wrap = document.createElement('div');
+  wrap.className = 'dm-msg';
+  wrap.dataset.dmId = dm.id;
+  const meta = document.createElement('div');
+  meta.className = 'meta';
+  const route = document.createElement('span');
+  route.className = 'route';
+  route.textContent = (dm.from || '?') + ' \u2192 ' + (dm.to || '?');
+  meta.appendChild(route);
+  const st = document.createElement('span');
+  st.className = 'dm-state ' + String(dm.state || 'queued');
+  st.textContent = dm.state || 'queued';
+  meta.appendChild(st);
+  if (dm.awaitReply) { const c = document.createElement('span'); c.className = 'dm-chip'; c.textContent = 'sync'; meta.appendChild(c); }
+  if (dm.hops) { const c = document.createElement('span'); c.className = 'dm-chip'; c.textContent = 'hop ' + dm.hops; meta.appendChild(c); }
+  if (dm.noRelay) { const c = document.createElement('span'); c.className = 'dm-chip warn'; c.textContent = 'no-relay'; meta.appendChild(c); }
+  const when = document.createElement('span');
+  when.className = 'when';
+  when.textContent = fmtTime(dm.ts);
+  meta.appendChild(when);
+  wrap.appendChild(meta);
+  const body = document.createElement('div');
+  body.className = 'body' + (dm.redacted ? ' redacted' : '');
+  if (dm.redacted) {
+    // The server hid the body: show only that it exists + its size.
+    body.textContent = '\ud83d\udd12 body hidden (private mode)' + (dm.textLength ? ' \u00b7 ' + dm.textLength + ' chars' : '');
+  } else {
+    body.textContent = dm.text || '';
+  }
+  wrap.appendChild(body);
+  if (dm.reply != null && dm.reply !== '') {
+    const rep = document.createElement('div');
+    rep.className = 'body reply' + (dm.redacted ? ' redacted' : '');
+    rep.textContent = dm.redacted ? '\ud83d\udd12 reply hidden (private mode)' : ('\u21b3 ' + dm.reply);
+    wrap.appendChild(rep);
+  }
+  return wrap;
+}
+
+function dmRenderThread() {
+  const box = $('dmThread');
+  if (!box) return;
+  if (!dmState.current) {
+    box.innerHTML = '<div class="empty"><div class="big">\ud83d\udce8</div><div class="hint">Select a conversation to view its messages.</div></div>';
+    return;
+  }
+  const msgs = dmMessagesFor(dmState.current);
+  if (!msgs.length) {
+    box.innerHTML = '<div class="empty"><div class="big">\ud83d\udce8</div><div class="hint">No messages in this conversation.</div></div>';
+    return;
+  }
+  box.innerHTML = '';
+  const parts = dmPairParts(dmState.current);
+  const head = document.createElement('div');
+  head.className = 'dm-thread-head';
+  head.textContent = parts.a + ' \u2194 ' + parts.b + ' \u00b7 ' + msgs.length + ' message' + (msgs.length === 1 ? '' : 's');
+  box.appendChild(head);
+  for (const dm of msgs) box.appendChild(dmBubble(dm));
+  box.scrollTop = box.scrollHeight;
+}
+
+function dmUpsert(dm) {
+  if (!dm || !dm.id) return;
+  const i = dmState.dms.findIndex((x) => x.id === dm.id);
+  if (i === -1) dmState.dms.push(dm); else dmState.dms[i] = dm;
+  dmState.dms.sort((a, b) => (a.ts || 0) - (b.ts || 0));
+  dmState.count = Math.max(dmState.count || 0, dmState.dms.length);
+  dmRenderPolicy();
+  dmRenderPairs();
+  dmRenderThread();
+}
+
+function dmOpenStream() {
+  dmCloseStream();
+  const es = new EventSource('/api/agent-dms/stream');
+  dmState.es = es;
+  es.addEventListener('hello', (ev) => {
+    try { const d = JSON.parse(ev.data); if (d && d.visibility) { dmState.visible = d.visibility; dmState.note = d.note || ''; dmRenderPolicy(); } } catch { /* ignore */ }
+  });
+  es.addEventListener('policy', (ev) => {
+    try { const d = JSON.parse(ev.data); if (d && d.visibility) { dmState.visible = d.visibility; dmState.note = d.note || ''; dmRenderPolicy(); dmRenderThread(); } } catch { /* ignore */ }
+  });
+  es.addEventListener('dm', (ev) => {
+    let p; try { p = JSON.parse(ev.data); } catch { return; }
+    if (p && p.dm) dmUpsert(p.dm);
+  });
+  es.onerror = () => { /* EventSource auto-reconnects */ };
+}
+function dmCloseStream() {
+  if (dmState.es) { try { dmState.es.close(); } catch { /* noop */ } dmState.es = null; }
+}
+// Called by setView whenever we leave a view.
+function dmTeardown() {
+  dmCloseStream();
+  if (dmState.timer) { clearInterval(dmState.timer); dmState.timer = null; }
+}
+
+async function refreshDms() {
+  let data;
+  try { data = await api('/api/agent-dms?limit=200'); } catch { return; }
+  if (data && data.visibility) { dmState.visible = data.visibility; dmState.note = data.note || ''; }
+  if (Array.isArray(data.dms)) dmState.dms = data.dms;
+  if (typeof data.count === 'number') dmState.count = data.count;
+  dmRenderPolicy();
+  dmRenderPairs();
+  dmRenderThread();
+}
+
+async function dmFlipVisibility() {
+  const visible = dmState.visible === 'visible';
+  const next = visible ? 'private' : 'visible';
+  const msg = next === 'visible'
+    ? 'Reveal agent DM bodies to admins? Only the two agents still exchange them — this changes what ADMINS can read, and the flip is audited.'
+    : 'Make agent DM bodies private again (hidden from admins)?';
+  if (!confirm(msg)) return;
+  try {
+    const r = await api('/api/agent-dms/visibility', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ visibility: next }),
+    });
+    dmState.visible = (r && r.visibility) || next;
+    toast('Agent DM policy: ' + dmState.visible, true);
+    await refreshDms();
+  } catch (e) { toast(e.message); }
+}
+
+async function renderAgentDm() {
+  dmTeardown();
+  const mgmt = $('mgmtView');
+  mgmt.style.display = 'flex';
+  mgmt.style.flexDirection = 'column';
+  mgmt.style.overflow = 'hidden';
+  mgmt.innerHTML = `
+    <div class="mgmt-head" style="flex:none;">
+      <h2>Agent DM</h2>
+      <p>Live cross-server direct messages between agents. <b>Private by default</b> — bodies are hidden from you unless you reveal them. You observe the traffic; posting to the Board breaks any runaway loop.</p>
+    </div>
+    <div class="dm-bar">
+      <div class="dm-policy" id="dmPolicy">Policy: …</div>
+      <div class="dm-bar-actions">
+        <input id="dmFilter" type="search" placeholder="filter agent…" autocomplete="off">
+        <button id="dmVisibilityBtn" class="btn-primary">…</button>
+      </div>
+    </div>
+    <div class="dm-body">
+      <div class="dm-pairs" id="dmPairs"><span class="dm-empty-mini">Loading…</span></div>
+      <div class="dm-thread" id="dmThread"><div class="empty"><div class="big">\ud83d\udce8</div><div class="hint">Select a conversation.</div></div></div>
+    </div>`;
+  $('dmFilter').value = dmState.filter;
+  $('dmFilter').addEventListener('input', () => { dmState.filter = $('dmFilter').value; dmRenderPairs(); dmRenderThread(); });
+  $('dmVisibilityBtn').addEventListener('click', dmFlipVisibility);
+  dmRenderPolicy();
+  await refreshDms();
+  dmOpenStream();
+  // Safety-net poll while the tab is open (SSE is primary; this catches a drop).
+  dmState.timer = setInterval(() => { if (state.view === 'agentdm') refreshDms(); }, 20000);
 }
 
 // ── wiring ──

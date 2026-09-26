@@ -2890,6 +2890,7 @@ function dmSetVisibility(v) {
   if (next === from) return { from, to: next, changed: false };
   DM.visibility = next;
   saveDmStore();
+  dmBroadcastPolicy(); // 4f — tell every open tab the policy changed
   return { from, to: next, changed: true };
 }
 // The admin-facing view of one DM: metadata always; the bodies ONLY when the
@@ -2924,6 +2925,29 @@ function dmAdminRead({ since, limit } = {}) {
   const cursor = dms.length ? dms[dms.length - 1].id : (since || null);
   return { dms: dms.map(dmAdminView), cursor, count: all.length };
 }
+
+// ── Agent DM live stream (plan item 4f) ─────────────────────────────────────
+// The Agent DM tab needs "live traffic": a state change on any DM (queued →
+// delivered → replied/failed) is pushed to every open tab without a poll. This
+// is the SSE twin of the board stream, but ADMIN-ONLY (the feed is admin-only)
+// and, like dmAdminRead, every frame is passed through dmAdminView — so the
+// privacy policy is enforced on the wire: in private mode a DM's body is never
+// in a frame, only its metadata + a length hint. A policy flip is broadcast too
+// (a `policy` event) so an open tab refreshes its banner without a reload.
+const dmSubs = new Set();
+function dmBroadcast(dm) {
+  if (!dmSubs.size) return;
+  const packet = `event: dm\ndata: ${JSON.stringify({ dm: dmAdminView(dm) })}\n\n`;
+  for (const sub of dmSubs) { try { sub.res.write(packet); } catch { /* dead client — reaped on close */ } }
+}
+function dmBroadcastPolicy() {
+  if (!dmSubs.size) return;
+  const info = dmVisibilityInfo();
+  const packet = `event: policy\ndata: ${JSON.stringify(info)}\n\n`;
+  for (const sub of dmSubs) { try { sub.res.write(packet); } catch { /* dead */ } }
+}
+function dmSubscribe(res) { const sub = { res }; dmSubs.add(sub); return sub; }
+function dmUnsubscribe(sub) { dmSubs.delete(sub); }
 
 // Sync-reply wait window (plan item 4c). A `awaitReply:true` DM holds its HTTP
 // response until the recipient's run emits its assistant message (matched by
@@ -3267,6 +3291,7 @@ async function dmRoute({ to, text, awaitReply, noRelay } = {}, fromIdent) {
   if (!dm) return { error: 'invalid message', status: 400 };
   DM.dms.push(dm);
   saveDmStore();
+  dmBroadcast(dm); // 4f — live traffic: a new (queued) DM to every open tab
   // The recipient's session carries the sender's addressable ref + the body, so
   // a cross-server DM is fully actionable with no extra lookup. This is the
   // ONLY place the body is emitted (to its intended recipient).
@@ -3290,6 +3315,7 @@ async function dmRoute({ to, text, awaitReply, noRelay } = {}, fromIdent) {
     dm.error = String((e && e.message) || e).slice(0, 300);
   }
   saveDmStore();
+  dmBroadcast(dm); // 4f — delivery state (delivered | failed)
   // Sync hold (4c): only worth waiting if the prompt actually reached the
   // recipient (a failed send has nothing to answer). The watcher matches the
   // ack'd runId across ALL sessions — a busy session acks a runId that isn't
@@ -3313,6 +3339,7 @@ async function dmRoute({ to, text, awaitReply, noRelay } = {}, fromIdent) {
         dm.replyTs = Date.now();
         dm.state = 'replied';
         saveDmStore();
+        dmBroadcast(dm); // 4f — the reply landed
       }
       return { dm, sync: true, timedOut: !replyText };
     } finally {
@@ -4867,6 +4894,26 @@ async function handleApi(req, res, url) {
     // Audit the admin read (count + whether bodies were redacted) — never a body.
     audit('agent_dm_admin_read', user.username, user.role, { count: r.dms.length, total: r.count, visibility: vis.visibility, redacted: vis.visibility !== 'visible' });
     return json(res, 200, { ok: true, ...vis, ...r });
+  }
+
+  // GET /api/agent-dms/stream — admin-only SSE of live DM traffic (plan item 4f).
+  // Every frame is a dmAdminView payload, so the privacy policy holds on the
+  // wire: in private mode a body is never sent (only metadata + textLength).
+  if (p === '/api/agent-dms/stream' && req.method === 'GET') {
+    if (!requireRole(user, 'admin')) return json(res, 403, { error: 'admins only' });
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+    // The hello frame carries the current policy so the tab's banner is right
+    // from the first paint (no extra round-trip).
+    res.write(`event: hello\ndata: ${JSON.stringify(dmVisibilityInfo())}\n\n`);
+    const sub = dmSubscribe(res);
+    const ping = setInterval(() => { try { res.write('event: ping\ndata: {}\n\n'); } catch { /* dead */ } }, 20000);
+    req.on('close', () => { clearInterval(ping); dmUnsubscribe(sub); });
+    return; // keep open
   }
 
   if (p === '/api/agent-dms/visibility' && req.method === 'POST') {
