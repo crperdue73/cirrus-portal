@@ -28,6 +28,8 @@ const KNOWN_CONFIG_KEYS = new Set([
   'boardRetentionDays', 'boardMaxPosts', 'boardMaxBytes', 'boardMentionWake',
   'agentDmRetentionDays', 'agentDmMaxMessages', 'agentDmMaxBytes',
   'agentDmAwaitReplyMs', 'agentDmSyncMaxConcurrent',
+  'agentDmHopWindowMs', 'agentDmPairRatePerMinute', 'agentDmPairBurst',
+  'agentDmCircuitMaxPerMinute', 'agentDmCircuitCooldownMs',
   'gateways', '_comment',
 ]);
 

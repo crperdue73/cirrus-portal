@@ -119,6 +119,15 @@ const DEFAULTS = {
   // callers can't exhaust the portal's sockets/handlers.
   agentDmAwaitReplyMs: 120000,    // max time to hold a sync DM for its reply
   agentDmSyncMaxConcurrent: 20,   // max concurrent sync (awaitReply) holds
+  // Cross-server agent DM loop safety (plan item 4d) — the loop-suppression
+  // layers. A DM chains `hops` off the recent reverse DM (past DM_HOPS_MAX the
+  // send is refused); a per-pair budget bounds one conversation; a fleet-wide
+  // circuit breaker covers the whole fleet; a human interjection resets both.
+  agentDmHopWindowMs: 600000,        // a reply chains hops only if the reverse DM is this recent
+  agentDmPairRatePerMinute: 30,      // per-pair (direction-insensitive) DM budget
+  agentDmPairBurst: 15,              // extra allowance above the steady per-pair rate
+  agentDmCircuitMaxPerMinute: 300,   // fleet-wide DM budget; exceeding it opens the circuit
+  agentDmCircuitCooldownMs: 60000,   // how long the circuit stays open once tripped
   // Board notify (plan item 2e) — @agent mention-wake is OPT-IN and off by
   // default. The v1 notify path is PULL (a per-identity unread cursor an agent
   // reads on its heartbeat); the wake push stays dark until the operator turns
@@ -287,6 +296,11 @@ function loadConfig() {
     PORTAL_AGENT_DM_MAX_BYTES: 'agentDmMaxBytes',
     PORTAL_AGENT_DM_AWAIT_REPLY_MS: 'agentDmAwaitReplyMs',
     PORTAL_AGENT_DM_SYNC_MAX_CONCURRENT: 'agentDmSyncMaxConcurrent',
+    PORTAL_AGENT_DM_HOP_WINDOW_MS: 'agentDmHopWindowMs',
+    PORTAL_AGENT_DM_PAIR_RATE_PER_MINUTE: 'agentDmPairRatePerMinute',
+    PORTAL_AGENT_DM_PAIR_BURST: 'agentDmPairBurst',
+    PORTAL_AGENT_DM_CIRCUIT_MAX_PER_MINUTE: 'agentDmCircuitMaxPerMinute',
+    PORTAL_AGENT_DM_CIRCUIT_COOLDOWN_MS: 'agentDmCircuitCooldownMs',
   };
   for (const [envKey, cfgKey] of Object.entries(envMap)) {
     if (process.env[envKey] !== undefined) {
@@ -793,14 +807,30 @@ async function handleAgentApi(req, res, url) {
     const body = await readBody(req);
     if (!body) return json(res, 400, { error: 'bad body' });
     const ident = dmIdentFromAgent(rec);
-    const r = await dmRoute({ to: body.to, text: body.text, awaitReply: body.awaitReply }, ident);
+    const r = await dmRoute({ to: body.to, text: body.text, awaitReply: body.awaitReply, noRelay: body.noRelay === true || body['no-relay'] === true }, ident);
     // Audit the decision (never the body): who, to whom, which way, and outcome.
+    // The loop-safety refusals (4d) each carry their own action so the guard is
+    // observable and each has a matching metric.
     if (r.unrouted) {
       METRICS.agentDmUnrouted++;
       audit('agent_dm_unrouted', rec.agentId, 'agent', { token: rec.id, from: ident.ref, to: dmTargetRef(body.to) });
     } else if (r.error) {
-      if (r.status === 429 && r.retryAfter) res.setHeader('Retry-After', String(r.retryAfter));
-      audit('agent_dm_rejected', rec.agentId, 'agent', { token: rec.id, from: ident.ref, status: r.status, sync: !!r.sync });
+      if (r.retryAfter && (r.status === 429 || r.status === 503)) res.setHeader('Retry-After', String(r.retryAfter));
+      if (r.circuitOpen) {
+        METRICS.agentDmCircuitOpen++;
+        audit('agent_dm_circuit_open', rec.agentId, 'agent', { token: rec.id, from: ident.ref, to: dmTargetRef(body.to), limit: r.limit, retryAfter: r.retryAfter });
+      } else if (r.loopBlocked) {
+        METRICS.agentDmLoopBlocked++;
+        audit('agent_dm_loop_blocked', rec.agentId, 'agent', { token: rec.id, from: ident.ref, to: dmTargetRef(body.to), hops: r.hops, max: r.max });
+      } else if (r.relayBlocked) {
+        METRICS.agentDmRelayBlocked++;
+        audit('agent_dm_relay_blocked', rec.agentId, 'agent', { token: rec.id, from: ident.ref, to: dmTargetRef(body.to) });
+      } else if (r.pairLimited) {
+        METRICS.agentDmRateLimited++;
+        audit('agent_dm_rate_limited', rec.agentId, 'agent', { token: rec.id, from: ident.ref, to: dmTargetRef(body.to), limit: r.limit, retryAfter: r.retryAfter });
+      } else {
+        audit('agent_dm_rejected', rec.agentId, 'agent', { token: rec.id, from: ident.ref, status: r.status, sync: !!r.sync });
+      }
     } else {
       const st = r.dm.state;
       if (st === 'delivered') METRICS.agentDms++;
@@ -809,6 +839,7 @@ async function handleAgentApi(req, res, url) {
       audit('agent_dm', rec.agentId, 'agent', {
         token: rec.id, dm: r.dm.id, from: r.dm.from, to: r.dm.to,
         toGateway: r.dm.toGateway, toAgent: r.dm.toAgent, state: st, hops: r.dm.hops,
+        noRelay: !!r.dm.noRelay,
         sync: !!r.sync, replied: st === 'replied', timedOut: r.sync ? !!r.timedOut : undefined,
       });
     }
@@ -2797,7 +2828,8 @@ function boardIdentFromAgent(rec) {
 // `from`/`to` are caller refs (`agent:<gw>:<id>` / `user:<name>`); the router
 // (4b) resolves and stamps `toGateway`/`toAgent`. `state` is one of queued |
 // delivered | replied | failed. `hops` (0..DM_HOPS_MAX) is the loop counter
-// (4d); `awaitReply` asks the router to hold a sync request (4c).
+// (4d); `awaitReply` asks the router to hold a sync request (4c); `noRelay`
+// marks a message the recipient must not relay on to a third party (4d).
 const DM_KEEP_MIN = 10;
 const DM_HOPS_MAX = 3;        // hard loop bound (plan item 4d) — clamped by normalization
 const DM_TEXT_MAX = 8000;     // per-message body cap (matches board posts)
@@ -2830,6 +2862,123 @@ function dmSyncMaxConcurrent() {
 }
 let dmSyncInFlight = 0;
 
+// ── Agent DM loop safety (plan item 4d) ─────────────────────────────────────
+// Agent DMs beget replies and replies beget replies: a fleet of auto-responding
+// agents can ping-pong a conversation forever. Four deterministic, in-memory,
+// bounded layers stop it (a restart clears them, exactly like the rate limiters):
+//   • hops     — a send that answers a RECENT reverse DM carries hops+1; past
+//                DM_HOPS_MAX (3) the send is refused. A fresh (non-reply) send
+//                starts at 0, so a new thread — or a human — resets the chain.
+//   • per-pair — a direction-insensitive rate + burst budget per conversation
+//                pair, so two chatty agents can't spend the fleet's capacity.
+//   • no-relay — a sender may mark a DM `noRelay`; the recipient may reply to
+//                that sender but must not relay the thread to a third party.
+//   • circuit  — a fleet-wide DM budget; exceeding it opens a breaker that
+//                refuses EVERY agent DM for a cooldown, so a runaway fleet
+//                cannot melt the portal.
+// Human involvement (a signed-in person posting to the board) breaks the loop
+// state — pair buckets cleared, breaker closed — so a human can always unstick
+// a runaway conversation.
+const dmPairBuckets = new Map(); // pairKey -> { count, resetAt }
+let dmCircuit = { count: 0, resetAt: 0, openUntil: 0 };
+
+const DM_LOOP_WINDOW_DEFAULT = 600000;
+function dmHopWindowMs() {
+  const v = Number(CONFIG.agentDmHopWindowMs);
+  if (!Number.isFinite(v) || v <= 0) return DM_LOOP_WINDOW_DEFAULT;
+  return Math.max(1000, Math.min(3600_000, Math.floor(v)));
+}
+function dmPairRateEnabled() { return (Number(CONFIG.agentDmPairRatePerMinute) || 0) > 0; }
+function dmPairRateMax() {
+  return Math.max(1, Number(CONFIG.agentDmPairRatePerMinute) || 30)
+    + Math.max(0, Number(CONFIG.agentDmPairBurst) || 0);
+}
+function dmCircuitMax() {
+  const v = Number(CONFIG.agentDmCircuitMaxPerMinute);
+  if (!Number.isFinite(v) || v <= 0) return 300;
+  return Math.max(1, Math.floor(v));
+}
+function dmCircuitCooldownMs() {
+  const v = Number(CONFIG.agentDmCircuitCooldownMs);
+  if (!Number.isFinite(v) || v <= 0) return 60000;
+  return Math.max(1000, Math.min(3600_000, Math.floor(v)));
+}
+// Direction-insensitive pair key, lowercased so ref case can't fork a bucket.
+function dmPairKey(a, b) {
+  const x = String(a || '').toLowerCase();
+  const y = String(b || '').toLowerCase();
+  return x <= y ? x + '\u0000' + y : y + '\u0000' + x;
+}
+function dmIsHumanRef(ref) { return /^user:/i.test(String(ref || '')); }
+
+// → null when allowed, else { retryAfter, limit } (seconds until the window resets).
+function dmPairCheck(pairKey, now) {
+  if (!dmPairRateEnabled()) return null;
+  let b = dmPairBuckets.get(pairKey);
+  if (!b || b.resetAt <= now) { b = { count: 0, resetAt: now + 60_000 }; dmPairBuckets.set(pairKey, b); }
+  b.count++;
+  // bound memory: drop expired buckets when the map grows large
+  if (dmPairBuckets.size > 5000) for (const [k, v] of dmPairBuckets) if (v.resetAt <= now) dmPairBuckets.delete(k);
+  if (b.count > dmPairRateMax()) return { retryAfter: Math.max(1, Math.ceil((b.resetAt - now) / 1000)), limit: dmPairRateMax() };
+  return null;
+}
+function dmPairReset(pairKey) { dmPairBuckets.delete(pairKey); }
+
+// The fleet-wide circuit breaker. Counts every routed send in a rolling 60s
+// window; past the cap it OPENS for a cooldown and refuses everything until it
+// resets (then one probe is allowed — half-open). → null when allowed.
+function dmCircuitCheck(now) {
+  if (dmCircuit.openUntil > now) {
+    return { retryAfter: Math.max(1, Math.ceil((dmCircuit.openUntil - now) / 1000)), limit: dmCircuitMax(), open: true };
+  }
+  if (dmCircuit.resetAt <= now) { dmCircuit.count = 0; dmCircuit.resetAt = now + 60_000; }
+  dmCircuit.count++;
+  if (dmCircuit.count > dmCircuitMax()) {
+    dmCircuit.openUntil = now + dmCircuitCooldownMs();
+    dmCircuit.resetAt = dmCircuit.openUntil; // the counting window restarts after the cooldown
+    dmCircuit.count = 0;
+    return { retryAfter: Math.max(1, Math.ceil((dmCircuit.openUntil - now) / 1000)), limit: dmCircuitMax(), open: true, tripped: true };
+  }
+  return null;
+}
+
+// Break every loop bound at once — called on human involvement. Returns true
+// when something was actually reset (so the caller can audit it).
+function dmBreakLoops() {
+  const had = dmPairBuckets.size > 0 || dmCircuit.openUntil > 0 || dmCircuit.count > 0;
+  dmPairBuckets.clear();
+  dmCircuit = { count: 0, resetAt: 0, openUntil: 0 };
+  return had;
+}
+
+// The most recent DM from `fromRef` to `toRef` within the hop window — i.e. the
+// message a new send from `toRef` to `fromRef` would be answering. Used for the
+// hop chain.
+function dmRecentReverse(list, fromRef, toRef, now) {
+  const f = String(fromRef || '').toLowerCase();
+  const t = String(toRef || '').toLowerCase();
+  const cutoff = now - dmHopWindowMs();
+  for (let i = list.length - 1; i >= 0; i--) {
+    const d = list[i];
+    if ((d.ts || 0) < cutoff) break;
+    if (String(d.from || '').toLowerCase() === f && String(d.to || '').toLowerCase() === t) return d;
+  }
+  return null;
+}
+
+// The most recent DM addressed TO `toRef` within the hop window — the sender's
+// last inbound. Drives the no-relay check.
+function dmRecentInbound(list, toRef, now) {
+  const t = String(toRef || '').toLowerCase();
+  const cutoff = now - dmHopWindowMs();
+  for (let i = list.length - 1; i >= 0; i--) {
+    const d = list[i];
+    if ((d.ts || 0) < cutoff) break;
+    if (String(d.to || '').toLowerCase() === t) return d;
+  }
+  return null;
+}
+
 // Terminal states are finished; only these may be dropped by prune.
 function dmIsTerminal(dm) { return !!dm && (dm.state === 'replied' || dm.state === 'failed'); }
 
@@ -2859,6 +3008,7 @@ function normalizeDm(d) {
     deliveredTs: Number(d.deliveredTs) || 0,
     hops,
     awaitReply: d.awaitReply === true,
+    noRelay: d.noRelay === true,
     error: d.error ? String(d.error).slice(0, 300) : null,
   };
 }
@@ -2934,11 +3084,11 @@ setInterval(() => { try { if (pruneDmStore() > 0) saveDmStore(); } catch { /* ne
 // `timedOut:true` when the budget elapses. The hold reuses the room engine's
 // state:final + runId watcher (across ALL sessions, so a channel-bound agent's
 // reply still matches) with its history-fallback for a busy/queued session, so
-// the whole thing stays inside ONE time budget. Loop safety (hops / per-pair
-// rate / burst budget / circuit breaker) is 4d; this item routes, records and
-// holds, it does not yet bound the loop. DM content is PRIVATE (4e): it is
-// delivered to the recipient's session and echoed to its sender — never to the
-// audit log.
+// the whole thing stays inside ONE time budget. Loop safety is layered in below
+// (4d): a hop counter, a per-pair rate + burst budget, a `noRelay` flag and a
+// fleet-wide circuit breaker, all checked before a DM is recorded. DM content is
+// PRIVATE (4e): it is delivered to the recipient's session and echoed to its
+// sender — never to the audit log.
 function newDmId() { return 'd' + Date.now().toString(36) + crypto.randomBytes(3).toString('hex'); }
 
 // Caller identity for an agent token, in the SAME `agent:<gw>:<id>` ref shape
@@ -2962,26 +3112,65 @@ function dmTargetRef(to) {
 // routed. The DM is persisted BEFORE delivery so a crash mid-send still leaves
 // a trace; its state moves queued → delivered | failed as the gateway answers.
 // The body is never logged: only the ids/refs/state reach the audit trail.
-async function dmRoute({ to, text, awaitReply } = {}, fromIdent) {
+async function dmRoute({ to, text, awaitReply, noRelay } = {}, fromIdent) {
   if (String(text == null ? '' : text).trim() === '') return { error: 'empty message', status: 400 };
   const sync = awaitReply === true;
   if (sync && dmSyncInFlight >= dmSyncMaxConcurrent()) {
     return { error: 'too many concurrent sync DMs — retry later', status: 429, retryAfter: 5, sync: true };
   }
+
+  // 4d — fleet-wide circuit breaker: the outermost loop guard, checked before
+  // target resolution so a runaway fleet can't even reach the fleet.
+  const now = Date.now();
+  const cb = dmCircuitCheck(now);
+  if (cb) {
+    return { error: 'agent DM circuit breaker open — fleet-wide DM flood', status: 503, retryAfter: cb.retryAfter, circuitOpen: true, limit: cb.limit };
+  }
+
   const targetRef = dmTargetRef(to);
   if (!targetRef) return { error: 'target (to) required', status: 400 };
   const t = resolveAgentRef(targetRef);
   if (!t) return { error: `target agent unreachable: ${targetRef}`, status: 404, unrouted: true };
+  const toRef = `agent:${t.gwId}:${t.agentId}`;
+
+  // 4d — per-pair rate + burst (direction-insensitive). A human-involved pair is
+  // exempt and its bucket is cleared: human involvement breaks the loop.
+  const pairKey = dmPairKey(fromIdent.ref, toRef);
+  if (dmIsHumanRef(fromIdent.ref) || dmIsHumanRef(toRef)) {
+    dmPairReset(pairKey);
+  } else {
+    const pr = dmPairCheck(pairKey, now);
+    if (pr) return { error: 'agent DM pair rate limit exceeded — slow down', status: 429, retryAfter: pr.retryAfter, pairLimited: true, limit: pr.limit };
+  }
+
+  // 4d — hop counter. A send that answers a RECENT reverse DM carries hops+1; a
+  // fresh (non-reply) send starts at 0, so a new thread — or a human — resets
+  // the chain. Past DM_HOPS_MAX the send is refused outright.
+  const thread = dmRecentReverse(DM.dms, toRef, fromIdent.ref, now);
+  const hops = thread ? thread.hops + 1 : 0;
+  if (hops > DM_HOPS_MAX) {
+    return { error: `agent DM loop bound reached (hop ${hops} > ${DM_HOPS_MAX})`, status: 429, loopBlocked: true, hops, max: DM_HOPS_MAX };
+  }
+
+  // 4d — no-relay: if the sender's most recent inbound was flagged no-relay, it
+  // may reply to that sender but must not relay the thread to a third party.
+  const relay = noRelay === true;
+  const inbound = dmRecentInbound(DM.dms, fromIdent.ref, now);
+  if (inbound && inbound.noRelay === true && String(inbound.from || '').toLowerCase() !== String(toRef).toLowerCase()) {
+    return { error: 'relay blocked: the most recent inbound DM was marked no-relay', status: 403, relayBlocked: true };
+  }
+
   const dm = normalizeDm({
     id: newDmId(),
     from: fromIdent.ref,
-    to: `agent:${t.gwId}:${t.agentId}`,
+    to: toRef,
     toGateway: t.gwId,
     toAgent: t.agentId,
     text: String(text),
-    ts: Date.now(),
+    ts: now,
     state: 'queued',
-    hops: 0,               // a fresh send starts the hop chain; replies carry +1 (4c/4d)
+    hops,                  // 0 for a fresh send; +1 per answer to a recent reverse DM
+    noRelay: relay,        // recipient may reply to the sender, not relay onward
     awaitReply: sync,
   });
   if (!dm) return { error: 'invalid message', status: 400 };
@@ -2990,7 +3179,10 @@ async function dmRoute({ to, text, awaitReply } = {}, fromIdent) {
   // The recipient's session carries the sender's addressable ref + the body, so
   // a cross-server DM is fully actionable with no extra lookup. This is the
   // ONLY place the body is emitted (to its intended recipient).
-  const wake = `[portal DM from ${fromIdent.ref}] ${dm.text}\n\n`
+  const noRelayNote = relay
+    ? ' ⚑ no-relay: do not forward or relay this message to any other agent; reply only to the sender.'
+    : '';
+  const wake = `[portal DM from ${fromIdent.ref}] ${dm.text}${noRelayNote}\n\n`
     + `Reply with POST /api/agent/dm {"to":"${fromIdent.ref}","text":"…"} (your copy is dm ${dm.id}).`;
   let sent = null;
   try {
@@ -3654,6 +3846,10 @@ const METRICS = {
   agentDmFailed: 0,
   agentDmUnrouted: 0,
   agentDmReplies: 0,
+  agentDmLoopBlocked: 0,
+  agentDmRateLimited: 0,
+  agentDmCircuitOpen: 0,
+  agentDmRelayBlocked: 0,
 };
 
 // One structured log line. `logFormat:"json"` (the default) emits a JSON object
@@ -3770,6 +3966,10 @@ function metrics(res, req) {
   metric('cirrus_portal_agent_dm_failed_total', 'counter', 'Cross-server agent DMs that failed at delivery since start.', [`cirrus_portal_agent_dm_failed_total ${METRICS.agentDmFailed}`]);
   metric('cirrus_portal_agent_dm_unrouted_total', 'counter', 'Agent DMs refused because the target agent was unreachable.', [`cirrus_portal_agent_dm_unrouted_total ${METRICS.agentDmUnrouted}`]);
   metric('cirrus_portal_agent_dm_replies_total', 'counter', 'Sync (awaitReply) agent DMs that returned the recipient\'s reply since start.', [`cirrus_portal_agent_dm_replies_total ${METRICS.agentDmReplies}`]);
+  metric('cirrus_portal_agent_dm_loop_blocked_total', 'counter', 'Agent DMs refused by the hop counter (loop bound).', [`cirrus_portal_agent_dm_loop_blocked_total ${METRICS.agentDmLoopBlocked}`]);
+  metric('cirrus_portal_agent_dm_rate_limited_total', 'counter', 'Agent DMs refused by the per-pair rate limit.', [`cirrus_portal_agent_dm_rate_limited_total ${METRICS.agentDmRateLimited}`]);
+  metric('cirrus_portal_agent_dm_circuit_open_total', 'counter', 'Agent DMs refused because the fleet circuit breaker was open.', [`cirrus_portal_agent_dm_circuit_open_total ${METRICS.agentDmCircuitOpen}`]);
+  metric('cirrus_portal_agent_dm_relay_blocked_total', 'counter', 'Agent DMs refused because the most recent inbound was marked no-relay.', [`cirrus_portal_agent_dm_relay_blocked_total ${METRICS.agentDmRelayBlocked}`]);
   metric('cirrus_portal_audit_entries', 'gauge', 'Lines currently in the audit log.', [`cirrus_portal_audit_entries ${auditLineCount()}`]);
   res.writeHead(200, { 'Content-Type': 'text/plain; version=0.0.4; charset=utf-8' });
   res.end(L.join('\n') + '\n');
@@ -4235,6 +4435,10 @@ async function handleApi(req, res, url) {
     if (r.denied) auditBoardDenied(body.board, bid, 'post', 'human');
     if (r.error) return json(res, r.status || 400, { error: r.error });
     audit('board_post', user.username, user.role, { id: r.post.id, board: r.post.board });
+    // Human involvement breaks agent DM loop state (plan item 4d): a signed-in
+    // person in the loop clears the per-pair DM budgets and closes any open
+    // circuit breaker, so a human can always unstick a runaway conversation.
+    if (dmBreakLoops()) audit('agent_dm_loops_broken', user.username, user.role, { reason: 'human_board_post', board: r.post.board });
     return json(res, 200, { ok: true, post: r.post });
   }
 

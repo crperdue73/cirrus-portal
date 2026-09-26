@@ -37,5 +37,10 @@
   "agentDmMaxMessages": 5000,
   "agentDmMaxBytes": 4194304,
   "agentDmAwaitReplyMs": 120000,
-  "agentDmSyncMaxConcurrent": 20
+  "agentDmSyncMaxConcurrent": 20,
+  "agentDmHopWindowMs": 600000,
+  "agentDmPairRatePerMinute": 30,
+  "agentDmPairBurst": 15,
+  "agentDmCircuitMaxPerMinute": 300,
+  "agentDmCircuitCooldownMs": 60000
 }
