@@ -1,5 +1,5 @@
 {
-  "_comment": "portal-config.json is TOKEN-FREE. Gateway tokens + the bootstrap admin password live in portal-secrets.json (0600). Network/TLS: bind defaults to 127.0.0.1 (loopback); exposing a non-loopback interface needs publicBind:true (or PORTAL_PUBLIC_BIND=1 / --public-bind) AND TLS (plan items 5 + 7) — see deploy/Caddyfile and deploy/nginx/cirrus-portal.conf.",
+  "_comment": "portal-config.json is TOKEN-FREE. Gateway tokens + the bootstrap admin password live in portal-secrets.json (0600). Network/TLS: bind defaults to 127.0.0.1 (loopback); exposing a non-loopback interface needs publicBind:true (or PORTAL_PUBLIC_BIND=1 / --public-bind) AND TLS (plan items 5 + 7). Remote-agent reachability (v3.1, Option A): the agent API must be reachable from agents on other fleet servers, so the intended posture is a LAN bind + TLS with the inbound firewall scoped to the fleet subnet — see docs/NETWORK-DECISION.md along with deploy/Caddyfile and deploy/nginx/cirrus-portal.conf.",
   "port": 18800,
   "bind": "127.0.0.1",
   "publicBind": false,

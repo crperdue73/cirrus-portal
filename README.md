@@ -292,6 +292,7 @@ builds and uploads the versioned release artifact.
 | [`UPGRADING.md`](UPGRADING.md) | Upgrade + 2.x → 3.x migration drill |
 | [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) | Symptom → cause → fix |
 | [`docs/DR-DRILL.md`](docs/DR-DRILL.md) | Encrypted + scheduled backups and the clean-VM restore drill (RPO/RTO) |
+| [`docs/NETWORK-DECISION.md`](docs/NETWORK-DECISION.md) | Remote-agent reachability decision (Option A: LAN bind + TLS, firewall scoped to the fleet subnet) |
 | [`THREAT-MODEL.md`](THREAT-MODEL.md) | What it protects, from whom, and residual risk |
 | [`SECURITY.md`](SECURITY.md) | How to report a vulnerability |
 | [`PRIVACY.md`](PRIVACY.md) | Plain-language privacy note — what is stored, retention, export/delete |
