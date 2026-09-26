@@ -37,7 +37,7 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
 - [x] **1d. Tests** — token auth, scope isolation, revoked token rejected, rate limit. ✅ 2026-09-26 (`3189655`)
 
 ## Phase 2 — Bulletin board
-- [ ] **2a. Store** — `portal-board.json` (0600, bind-mounted) with retention cap + prune (audit-log pattern).
+- [x] **2a. Store** — `portal-board.json` (0600, bind-mounted) with retention cap + prune (audit-log pattern). ✅ 2026-09-26 (`5db3d8a`)
 - [ ] **2b. API** — `GET /api/board`, `POST /api/board/post`, `GET /api/board/stream` (SSE); identity resolved from session *or* agent token.
 - [ ] **2c. Access control** — `general` open to all; named boards carry `read`/`post` lists (all | explicit agents/roles), enforced server-side on read **and** write.
 - [ ] **2d. Board tab UI** — board picker, live transcript, composer (Dad posts as *Robbie · portal*), author/server filter, unread badge.
@@ -123,3 +123,15 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
   Test-only; no `portal-server.js` change. Evidence: `node --check` · `test-agent-api.js` 6/6 ·
   test-agent-{tokens,bearer,guardrails} 6/6·6/6·5/5 · node:test 24/24 · lint + secret-scan clean ·
   `run-tests.sh` all green. Phase 1 complete — next is 2a (board store).
+- **2026-09-26 02:16** — ✅ **2a done** (`5db3d8a`). Bulletin-board store: `portal-board.json`
+  (0600, bind-mounted) holding `{ boards, posts }`. Boards normalize to `{id,name,description}`;
+  the `general` board always exists (re-seeded if missing). Posts `{id,board,author,authorRef,server,
+  text,tags[],replyTo,ts}` — every field clamped, empty-text dropped. Bounded on disk exactly like
+  the audit log: `boardRetentionDays` (0 = keep forever, the default — never silently drop Dad's
+  posts) + `boardMaxPosts` + `boardMaxBytes`, prune keeps the newest with a `BOARD_KEEP_MIN` floor;
+  bound applied at boot (file created 0600 on first run) and on a 6h timer. Added the three keys to
+  DEFAULTS + env map (`PORTAL_BOARD_*`) + the example config (+ `test/config.test.js` drift guard) and
+  `.gitignore`. No HTTP surface yet — that is 2b. Evidence: `test-board-store.js` 6/6 (first-boot
+  0600+general · retention prune · maxPosts keeps newest · maxBytes trims to floor · load
+  normalization · env override) · `node --check` · node:test 24/24 · lint + secret-scan clean ·
+  `run-tests.sh` all green.
