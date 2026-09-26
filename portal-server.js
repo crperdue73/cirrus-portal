@@ -680,6 +680,33 @@ async function handleAgentApi(req, res, url) {
     return json(res, 200, { ok: true, agent: ident });
   }
 
+  // Bulletin-board surface for agents (plan item 2b): the SAME read/post core
+  // as the human surface, with identity resolved from the Bearer token instead
+  // of a cookie. The body cap + per-token rate limit above already apply.
+  if (p === '/api/agent/board' && req.method === 'GET') {
+    const r = boardRead({
+      boardId: url.searchParams.get('board'),
+      since: url.searchParams.get('since') || '',
+      limit: url.searchParams.get('limit'),
+    });
+    audit('agent_call', rec.agentId, 'agent', { ...callDetail, status: r.error ? (r.status || 404) : 200 });
+    if (r.error) return json(res, r.status || 404, { error: r.error });
+    return json(res, 200, { ok: true, ...r });
+  }
+
+  if (p === '/api/agent/board/post' && req.method === 'POST') {
+    const body = await readBody(req);
+    if (!body) return json(res, 400, { error: 'bad body' });
+    const r = boardPost(
+      { boardId: body.board, text: body.text, tags: body.tags, replyTo: body.replyTo },
+      boardIdentFromAgent(rec),
+    );
+    audit('agent_call', rec.agentId, 'agent', { ...callDetail, status: r.error ? (r.status || 400) : 200 });
+    if (r.error) return json(res, r.status || 400, { error: r.error });
+    audit('board_post', rec.agentId, 'agent', { id: r.post.id, board: r.post.board, via: 'agent', token: rec.id });
+    return json(res, 200, { ok: true, post: r.post });
+  }
+
   audit('agent_call', rec.agentId, 'agent', { ...callDetail, status: 404 });
   return json(res, 404, { error: 'not found' });
 }
@@ -2098,6 +2125,113 @@ const BOARD = loadBoardStore();
 try { pruneBoardStore(); saveBoardStore(); } catch { /* never fatal */ }
 setInterval(() => { try { if (pruneBoardStore() > 0) saveBoardStore(); } catch { /* never fatal */ } }, 6 * 3600_000).unref();
 
+// ── Bulletin board API service (plan item 2b) ───────────────────────────────
+// The read/post core that BOTH surfaces call — the human surface (/api/board*,
+// session+CSRF) and the agent surface (/api/agent/board*, Bearer). Each caller
+// resolves its own identity into a common shape and hands it in, so the two
+// surfaces can never diverge in what gets stored or streamed:
+//   ident = { author, authorRef, server, role }
+// Access control (named boards, read/post lists) is item 2c and layers on top of
+// boardRead/boardPost — this item enforces only that the board exists.
+const BOARD_DEFAULT_LIMIT = 50;
+const BOARD_MAX_LIMIT = 200;
+
+// Live subscribers: a Set of { res, board }, where board=null means "all boards".
+const boardSubs = new Set();
+
+function boardById(id) {
+  const want = String(id || BOARD_DEFAULT.id).trim().toLowerCase() || BOARD_DEFAULT.id;
+  return BOARD.boards.find(b => b.id === want) || null;
+}
+
+function boardLimit(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v) || v <= 0) return BOARD_DEFAULT_LIMIT;
+  return Math.min(BOARD_MAX_LIMIT, Math.floor(v));
+}
+
+// Read posts for one board, oldest→newest. `since` is a post id the caller
+// already holds: we return only what came after it, so an agent can poll a
+// cursor without re-reading the whole board. A `since` that has been pruned
+// falls back to the newest window. `boards` rides along so a UI/agent can
+// render the picker without a second call.
+function boardRead({ boardId, since, limit } = {}) {
+  const board = boardById(boardId);
+  if (!board) return { error: 'no such board', status: 404 };
+  const all = BOARD.posts.filter(p => p.board === board.id);
+  let posts;
+  if (since) {
+    const i = all.findIndex(p => p.id === since);
+    posts = i === -1 ? all.slice(-boardLimit(limit)) : all.slice(i + 1);
+  } else {
+    posts = all.slice(-boardLimit(limit));
+  }
+  const cursor = posts.length ? posts[posts.length - 1].id : (since || null);
+  return { board, boards: BOARD.boards.map(b => ({ ...b })), posts, cursor };
+}
+
+// A post id that sorts by append time and is collision-resistant: base-36
+// millis + random suffix, so two posts in the same millisecond never clash.
+function newPostId() {
+  return 'p' + Date.now().toString(36) + crypto.randomBytes(3).toString('hex');
+}
+
+// Append a post. `ident` is resolved by the caller (session or agent token).
+// The post is normalized/clamped by the store (item 2a) before it is persisted,
+// then broadcast to every live SSE subscriber watching that board.
+function boardPost({ boardId, text, tags, replyTo } = {}, ident) {
+  const board = boardById(boardId);
+  if (!board) return { error: 'no such board', status: 404 };
+  const body = String(text == null ? '' : text).trim();
+  if (!body) return { error: 'text required', status: 400 };
+  const post = normalizePost({
+    id: newPostId(),
+    board: board.id,
+    author: ident && ident.author,
+    authorRef: ident && ident.authorRef,
+    server: ident && ident.server,
+    text: body,
+    tags,
+    replyTo,
+    ts: Date.now(),
+  });
+  if (!post) return { error: 'text required', status: 400 };
+  BOARD.posts.push(post);
+  pruneBoardStore();
+  saveBoardStore();
+  METRICS.boardPosts++;
+  boardBroadcast(post);
+  return { post };
+}
+
+function boardBroadcast(post) {
+  const packet = `event: post\ndata: ${JSON.stringify({ board: post.board, post })}\n\n`;
+  for (const sub of boardSubs) {
+    if (sub.board && sub.board !== post.board) continue;
+    try { sub.res.write(packet); } catch { /* dead client — reaped on close */ }
+  }
+}
+
+function boardSubscribe(res, boardId) { const sub = { res, board: boardId || null }; boardSubs.add(sub); return sub; }
+function boardUnsubscribe(sub) { boardSubs.delete(sub); }
+
+// Resolve a board identity from a portal *user* (human session). Dad posts as
+// "Robbie · portal": his display name is the author and the server tag is
+// `portal`, so a human post is distinguishable from an agent's at a glance.
+function boardIdentFromUser(user) {
+  const name = (user && (user.displayName || user.username)) || 'unknown';
+  return { author: name, authorRef: 'user:' + (user ? user.username : '?'), server: 'portal', role: user ? user.role : 'anon' };
+}
+
+// Resolve a board identity from an *agent token* record: the agent id is the
+// author and the gateway the token is bound to is the server tag, so a
+// cross-server post carries its origin.
+function boardIdentFromAgent(rec) {
+  const gw = rec && rec.gatewayId ? String(rec.gatewayId) : '';
+  const id = (rec && rec.agentId) || 'agent';
+  return { author: id, authorRef: 'agent:' + (gw ? gw + ':' + id : id), server: gw, role: 'agent' };
+}
+
 // ── Group chat rooms (panel mode, Aug 3 2026) ───────────────────────────────
 // A room is 2+ agents plus a shared transcript. A *round* sends the full
 // transcript to each agent in turn, waits for its reply, appends, and moves
@@ -2676,6 +2810,7 @@ const METRICS = {
   csrfRejects: 0,
   rateLimited: 0,
   agentRateLimited: 0,
+  boardPosts: 0,
 };
 
 // One structured log line. `logFormat:"json"` (the default) emits a JSON object
@@ -2785,6 +2920,7 @@ function metrics(res, req) {
   metric('cirrus_portal_csrf_rejects_total', 'counter', 'State-changing requests rejected on CSRF.', [`cirrus_portal_csrf_rejects_total ${METRICS.csrfRejects}`]);
   metric('cirrus_portal_rate_limited_total', 'counter', 'Requests rejected by the per-IP rate limit.', [`cirrus_portal_rate_limited_total ${METRICS.rateLimited}`]);
   metric('cirrus_portal_agent_rate_limited_total', 'counter', 'Agent API requests rejected by the per-token rate limit.', [`cirrus_portal_agent_rate_limited_total ${METRICS.agentRateLimited}`]);
+  metric('cirrus_portal_board_posts_total', 'counter', 'Bulletin-board posts appended since start.', [`cirrus_portal_board_posts_total ${METRICS.boardPosts}`]);
   metric('cirrus_portal_audit_entries', 'gauge', 'Lines currently in the audit log.', [`cirrus_portal_audit_entries ${auditLineCount()}`]);
   res.writeHead(200, { 'Content-Type': 'text/plain; version=0.0.4; charset=utf-8' });
   res.end(L.join('\n') + '\n');
@@ -3262,6 +3398,48 @@ async function handleApi(req, res, url) {
       clearInterval(ping);
       client.unsubscribe(session, res);
     });
+    return; // keep open
+  }
+
+  // ── Bulletin board (plan item 2b) ────────────────────────────────────
+  // Human surface: session-authed (the cookie is the identity, and the CSRF
+  // gate above already covered the POST). The agent surface
+  // (/api/agent/board*) shares the exact same read/post core.
+  if (p === '/api/board' && req.method === 'GET') {
+    const r = boardRead({
+      boardId: url.searchParams.get('board'),
+      since: url.searchParams.get('since') || '',
+      limit: url.searchParams.get('limit'),
+    });
+    if (r.error) return json(res, r.status || 404, { error: r.error });
+    return json(res, 200, { ok: true, ...r });
+  }
+
+  if (p === '/api/board/post' && req.method === 'POST') {
+    const body = await readBody(req);
+    if (!body) return json(res, 400, { error: 'bad body' });
+    const r = boardPost(
+      { boardId: body.board, text: body.text, tags: body.tags, replyTo: body.replyTo },
+      boardIdentFromUser(user),
+    );
+    if (r.error) return json(res, r.status || 400, { error: r.error });
+    audit('board_post', user.username, user.role, { id: r.post.id, board: r.post.board });
+    return json(res, 200, { ok: true, post: r.post });
+  }
+
+  if (p === '/api/board/stream' && req.method === 'GET') {
+    const boardId = url.searchParams.get('board') || BOARD_DEFAULT.id;
+    if (!boardById(boardId)) return json(res, 404, { error: 'no such board' });
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+    res.write(`event: hello\ndata: ${JSON.stringify({ board: boardId })}\n\n`);
+    const sub = boardSubscribe(res, boardId);
+    const ping = setInterval(() => { try { res.write('event: ping\ndata: {}\n\n'); } catch { /* dead */ } }, 20000);
+    req.on('close', () => { clearInterval(ping); boardUnsubscribe(sub); });
     return; // keep open
   }
 
