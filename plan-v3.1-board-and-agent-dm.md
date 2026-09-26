@@ -31,7 +31,7 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
 - [x] **0c. Record the Option A decision** in `portal-config.json`/docs: LAN bind + TLS, agent API reachable remotely, firewall scoped. ✅ 2026-09-25 (`4aa5bb4`)
 
 ## Phase 1 — Agent API foundation (both features depend on this)
-- [ ] **1a. Agent token store** — `portal-secrets.json.agentTokens`, token **hashed** (scrypt), value `{agentId, gatewayId, label, createdAt}`; mint/revoke/rotate helper + admin UI hook.
+- [x] **1a. Agent token store** — `portal-secrets.json.agentTokens`, token **hashed** (scrypt), value `{agentId, gatewayId, label, createdAt}`; mint/revoke/rotate helper + admin UI hook. ✅ 2026-09-25 (`b54f63b`)
 - [ ] **1b. Bearer auth** — `Authorization: Bearer <token>` accepted **only** on `/api/agent/*`; never satisfiable on human/admin routes; no CSRF on that path (no cookies).
 - [ ] **1c. Guardrails** — per-token rate limit, body cap, audit entry per call, revocation.
 - [ ] **1d. Tests** — token auth, scope isolation, revoked token rejected, rate limit.
@@ -82,3 +82,11 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
   6/6 · test-tls 6/6 · test-docs 5/5 · test-compliance 6/6 · test-release 8/8 · node:test 24/24 · lint +
   secret-scan clean · `run-tests.sh` all green. Live `portal-config.json` annotated with the same decision
   (gitignored; no operational fields changed — production untouched).
+- **2026-09-25 22:16** — ✅ **1a done** (`b54f63b`). Agent token store: `portal-secrets.json.agentTokens`
+  now holds hashed records (`{id, agentId, gatewayId, label, createdAt, rotatedAt, salt, hash, lookup}`) —
+  scrypt hash is authoritative, sha256 `lookup` is a one-way index so a request never scrypts the whole
+  store. Added `mintAgentToken`/`rotateAgentToken`/`revokeAgentToken`/`listAgentTokens`/`verifyAgentToken`
+  (helper for 1b) + admin API `GET/POST /api/agent-tokens`, `POST /api/agent-tokens/:id/rotate`,
+  `DELETE /api/agent-tokens/:id` (admin-only, CSRF-gated, audited; secret shown exactly once, never logged).
+  Extended `portal-secrets.example.json`. Evidence: `test-agent-tokens.js` 6/6 · lint + secret-scan clean ·
+  node:test 24/24 · `run-tests.sh` all green. Bearer acceptance on `/api/agent/*` is item 1b (not yet wired).
