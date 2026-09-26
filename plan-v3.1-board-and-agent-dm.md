@@ -52,7 +52,7 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
 - [x] **4a. Mailbox store** — `portal-agent-dm.json` (0600): id, from, to, text, ts, state, reply, hops, awaitReply. ✅ 2026-09-26 (`eb93baf`)
 - [x] **4b. Routing** — resolve target gateway → `chat.send` into `agent:<id>:main`. Same code path for local and remote. ✅ 2026-09-26 (`8ea894d`)
 - [x] **4c. Sync reply** — `awaitReply:true` returns the recipient's next assistant message (reuse `state:final` + `runId` watcher). ✅ 2026-09-26 (`b4c898e`)
-- [ ] **4d. Loop safety** — hop counter (max 3), per-pair rate limit, burst budget, no-relay flag, circuit breaker.
+- [x] **4d. Loop safety** — hop counter (max 3), per-pair rate limit, burst budget, no-relay flag, circuit breaker. ✅ 2026-09-26 (`793299b`)
 - [ ] **4e. Privacy** — content hidden from admin by default, server-side; `agentDmVisibility` switch; **agents are told** the current visibility and the flip is audited.
 - [ ] **4f. Agent DM tab UI** — live traffic, per-pair threads, delivery/reply state.
 - [ ] **4g. Tests** — cross-gateway delivery, awaitReply, **loop regression**, privacy on/off.
@@ -328,3 +328,25 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
   4/4 · `node --check` · node:test **24/24** · lint + secret-scan clean · `run-tests.sh` all green.
   No `portal.html` change (the Agent DM tab is 4f) — preview `portal-preview` untouched, no restart
   needed. Next: 4d (loop safety — hop counter, per-pair rate, burst budget, no-relay, circuit breaker).
+- **2026-09-26 13:16** — ✅ **4d done** (`793299b`). Cross-server DM **loop safety** — four deterministic,
+  in-memory, bounded layers on the 4b router (a restart clears them, like the rate limiters):
+  **hops** — a send that answers a RECENT reverse DM (`agentDmHopWindowMs`, default 600s) carries `hops+1`;
+  past `DM_HOPS_MAX` (3) it is refused **429** and stored nowhere, and a fresh (non-reply) send starts at 0
+  so a new thread resets the chain (`dmRecentReverse`); **per-pair** — a direction-insensitive rate + burst
+  budget (`agentDmPairRatePerMinute`+`agentDmPairBurst`, key = sorted lowercased refs) → **429 + Retry-After**
+  (`dmPairCheck`); **no-relay** — a DM flagged `noRelay` lets the recipient reply to the sender but refuses a
+  relay to a third party **403** (`dmRecentInbound`); **circuit** — a fleet-wide budget
+  (`agentDmCircuitMaxPerMinute`) that on overflow OPENS for `agentDmCircuitCooldownMs`, refusing every pair
+  **503 + Retry-After** until it half-opens (`dmCircuitCheck`). **Human involvement breaks the loop state**
+  (`dmBreakLoops`: pair buckets cleared + breaker closed) — wired to a signed-in board post, so a human can
+  always unstick a runaway fleet. Every refusal audited (`agent_dm_loop_blocked`/`_rate_limited`/`_circuit_open`/
+  `_relay_blocked`/`_loops_broken`) with ids only — never a body or a token — and each has a metric
+  (`…_dm_loop_blocked_total`/`_rate_limited`/`_circuit_open`/`_relay_blocked`); the `agent_dm` send audit now
+  also carries `hops`+`noRelay`. Added the five keys (DEFAULTS + `PORTAL_AGENT_DM_*` env + example config +
+  `test/config.test.js` drift guard). Evidence: `test-agent-dm-loop.js` **7/7** (hop chain 0→3 + 4th refused
+  no-write · fresh pair resets to 0 · no-relay blocks a 3rd-party relay 403 but allows the reply · no
+  body/token in audit + 0600 store with hops/noRelay · per-pair 429+Retry-After direction-insensitive ·
+  human board post resets the budget · fleet circuit 503+Retry-After, refuses all pairs, recovers after
+  cooldown) · `node --check` · test-agent-dm-{route,store,sync} 10/10·6/6·9/9 · node:test **24/24** ·
+  `run-tests.sh` all green · lint + secret-scan clean. No `portal.html` change (Agent DM tab is 4f) — preview
+  `portal-preview` untouched. Next: 4e (privacy — admin visibility switch, agents told the policy).
