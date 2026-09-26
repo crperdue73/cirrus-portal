@@ -53,7 +53,7 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
 - [x] **4b. Routing** — resolve target gateway → `chat.send` into `agent:<id>:main`. Same code path for local and remote. ✅ 2026-09-26 (`8ea894d`)
 - [x] **4c. Sync reply** — `awaitReply:true` returns the recipient's next assistant message (reuse `state:final` + `runId` watcher). ✅ 2026-09-26 (`b4c898e`)
 - [x] **4d. Loop safety** — hop counter (max 3), per-pair rate limit, burst budget, no-relay flag, circuit breaker. ✅ 2026-09-26 (`793299b`)
-- [ ] **4e. Privacy** — content hidden from admin by default, server-side; `agentDmVisibility` switch; **agents are told** the current visibility and the flip is audited.
+- [x] **4e. Privacy** — content hidden from admin by default, server-side; `agentDmVisibility` switch; **agents are told** the current visibility and the flip is audited. ✅ 2026-09-26 (`ba4f065`)
 - [ ] **4f. Agent DM tab UI** — live traffic, per-pair threads, delivery/reply state.
 - [ ] **4g. Tests** — cross-gateway delivery, awaitReply, **loop regression**, privacy on/off.
 
@@ -350,3 +350,23 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
   cooldown) · `node --check` · test-agent-dm-{route,store,sync} 10/10·6/6·9/9 · node:test **24/24** ·
   `run-tests.sh` all green · lint + secret-scan clean. No `portal.html` change (Agent DM tab is 4f) — preview
   `portal-preview` untouched. Next: 4e (privacy — admin visibility switch, agents told the policy).
+- **2026-09-26 14:16** — ✅ **4e done** (`ba4f065`). Agent DM **privacy**. Cross-server DMs are now
+  **private by default**: the mailbox keeps the bodies, but only the two parties may read them. A new
+  admin-only feed `GET /api/agent-dms` returns metadata for every DM (`from`/`to`/`ts`/`state`/`hops`)
+  but **strips `text`/`reply` server-side** in private mode (`redacted:true` + a `textLength` size hint
+  only) — the body never leaves the server, so no client bug or admin read can leak it. The single
+  switch is `agentDmVisibility` (`private` | `visible`; aliases normalized), **persisted in the DM
+  store** (0600) so an admin flip survives a restart, seeded from config on a fresh store. Flipping it
+  is `POST /api/agent-dms/visibility` (admin-only + CSRF) → audited `agent_dm_visibility {from,to}`
+  (never any content) with the new `cirrus_portal_agent_dm_visibility_changes_total` counter + a
+  `cirrus_portal_agent_dm_bodies_visible` gauge. **Agents are told the policy** three ways: `/api/agent/whoami`
+  now carries `dmVisibility` + a plain note, and both DM send and read replies echo the policy — so an
+  agent knows before it sends. An admin read is audited (`agent_dm_admin_read` with `redacted`) and
+  PRIVACY.md documents the default + the switch. Added the config key (DEFAULTS + `PORTAL_AGENT_DM_VISIBILITY`
+  env + example + `test/config.test.js` drift guard). No `portal.html` change (the Agent DM tab is 4f) —
+  preview `portal-preview` untouched. Evidence: `test-agent-dm-privacy.js` **6/6** (private default →
+  metadata-only admin read, body absent from the JSON + audit · flip audited/counted + agents told +
+  bodies surface · flip back restores redaction · non-admin 403 / Bearer inert 401 / no-CSRF 403 /
+  unknown value 400 no-change · 0600 store + policy survives restart) · test-agent-dm-{store,route,sync,loop}
+  6/6·10/10·9/9·7/7 · test/config 4/4 · `node --check` · lint + secret-scan clean · `run-tests.sh` all green.
+  Next: 4f (Agent DM tab UI).
