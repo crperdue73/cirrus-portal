@@ -688,7 +688,8 @@ async function handleAgentApi(req, res, url) {
       boardId: url.searchParams.get('board'),
       since: url.searchParams.get('since') || '',
       limit: url.searchParams.get('limit'),
-    });
+    }, boardIdentFromAgent(rec));
+    if (r.denied) auditBoardDenied(url.searchParams.get('board'), boardIdentFromAgent(rec), 'read', 'agent');
     audit('agent_call', rec.agentId, 'agent', { ...callDetail, status: r.error ? (r.status || 404) : 200 });
     if (r.error) return json(res, r.status || 404, { error: r.error });
     return json(res, 200, { ok: true, ...r });
@@ -697,10 +698,12 @@ async function handleAgentApi(req, res, url) {
   if (p === '/api/agent/board/post' && req.method === 'POST') {
     const body = await readBody(req);
     if (!body) return json(res, 400, { error: 'bad body' });
+    const bid = boardIdentFromAgent(rec);
     const r = boardPost(
       { boardId: body.board, text: body.text, tags: body.tags, replyTo: body.replyTo },
-      boardIdentFromAgent(rec),
+      bid,
     );
+    if (r.denied) auditBoardDenied(body.board, bid, 'post', 'agent');
     audit('agent_call', rec.agentId, 'agent', { ...callDetail, status: r.error ? (r.status || 400) : 200 });
     if (r.error) return json(res, r.status || 400, { error: r.error });
     audit('board_post', rec.agentId, 'agent', { id: r.post.id, board: r.post.board, via: 'agent', token: rec.id });
@@ -2030,27 +2033,91 @@ function readAudit(limit) {
 //   • boardMaxPosts      — hard count cap; oldest posts dropped past it
 //   • boardMaxBytes      — hard size cap; oldest posts trimmed past it
 // Pruning always keeps at least the newest BOARD_KEEP_MIN posts. The store is
-// the single source of truth for board definitions + post order; access
-// control (2c) and the HTTP surface (2b) are layered on top of it. Identity
+// the single source of truth for board definitions (name + access lists) and
+// post order; the HTTP surface (2b) is layered on top of it. Identity
 // (author / authorRef / server) is resolved per caller by 2b/2c — the store
 // only normalizes and persists whatever it is handed.
 const BOARD_KEEP_MIN = 10;
-const BOARD_DEFAULT = { id: 'general', name: 'General', description: 'Fleet-wide bulletin board — everyone reads and posts.' };
+const BOARD_ACL_MAX = 64;   // rules retained per list — bounded state, like posts
+const BOARD_DEFAULT = { id: 'general', name: 'General', description: 'Fleet-wide bulletin board — everyone reads and posts.', read: ['all'], post: ['all'] };
 
 function boardRetentionDays() { return Math.max(0, Number(CONFIG.boardRetentionDays) || 0); }
 function boardMaxPosts() { return Math.max(BOARD_KEEP_MIN, Number(CONFIG.boardMaxPosts) || 2000); }
 function boardMaxBytes() { return Math.max(64 * 1024, Number(CONFIG.boardMaxBytes) || 2 * 1024 * 1024); }
 
-// A board is { id, name, description }. The id is the stable key (lowercased).
+// ── Board access control (plan item 2c) ─────────────────────────────────────
+// A board carries two allow-lists — `read` and `post` — each a set of rules.
+// A rule is one of (case-insensitive, trimmed):
+//   all | *            every caller (the general board's rule)
+//   role:<r>           a portal role: admin | instructor | student | agent | anon
+//   user:<username>    one human account (matches authorRef user:<username>)
+//   agent:<id>         one agent id, on ANY gateway
+//   agent:<gw>:<id>    one agent on one specific gateway (exact)
+//   gateway:<gw>       any agent whose token is bound to that gateway
+// A bare token with no prefix is treated as an agent id (convenience).
+// Default-deny: a named board with no matching rule is closed to non-admins,
+// on BOTH read and write, enforced server-side. Admins always pass, and the
+// `general` board is force-opened on load so it can never be locked out.
+function normalizeAcl(list) {
+  if (list == null) return [];
+  const arr = Array.isArray(list) ? list : [list];
+  const out = [];
+  for (const raw of arr) {
+    const s = String(raw == null ? '' : raw).trim().toLowerCase().slice(0, 120);
+    if (!s || out.includes(s)) continue;
+    out.push(s);
+    if (out.length >= BOARD_ACL_MAX) break;
+  }
+  return out;
+}
+
+// Does one ACL rule admit this ident? ident = { author, authorRef, server, role }.
+function boardAclRuleMatches(rule, ident) {
+  const r = String(rule || '').trim().toLowerCase();
+  if (!r) return false;
+  if (r === 'all' || r === '*') return true;
+  const role = String((ident && ident.role) || '').toLowerCase();
+  const ref = String((ident && ident.authorRef) || '').toLowerCase();
+  const server = String((ident && ident.server) || '').toLowerCase();
+  if (r.startsWith('role:')) return role === r.slice(5);
+  if (r.startsWith('user:')) return ref === r;
+  if (r.startsWith('gateway:')) return server === r.slice(8);
+  const refAgent = ref.startsWith('agent:') ? ref.slice(6) : ''; // '<gw>:<id>' or '<id>'
+  const refId = refAgent.includes(':') ? refAgent.slice(refAgent.lastIndexOf(':') + 1) : refAgent;
+  if (r.startsWith('agent:')) {
+    const want = r.slice(6);
+    return want === refAgent || want === refId; // exact '<gw>:<id>' or bare id
+  }
+  return r === refId; // bare token → agent id
+}
+
+// May this ident read/post this board? Admins bypass; general is always open;
+// everything else is an explicit allow-list (default-deny).
+function boardAclAllows(board, ident, kind) {
+  if (!board) return false;
+  if (ident && String(ident.role).toLowerCase() === 'admin') return true;
+  if (board.id === BOARD_DEFAULT.id) return true;
+  const list = kind === 'post' ? board.post : board.read;
+  return Array.isArray(list) && list.some((r) => boardAclRuleMatches(r, ident));
+}
+
+// A board is { id, name, description, read, post }. The id is the stable key
+// (lowercased); read/post are ACL rule lists (item 2c).
 function normalizeBoard(b) {
   if (!b || typeof b !== 'object') return null;
   const id = String(b.id || '').trim().toLowerCase().slice(0, 64);
   if (!id) return null;
-  return {
+  const board = {
     id,
     name: String(b.name || id).trim().slice(0, 80) || id,
     description: String(b.description || '').slice(0, 280),
+    read: normalizeAcl(b.read),
+    post: normalizeAcl(b.post),
   };
+  // The general board is open to all, always — enforced regardless of what was
+  // persisted, so no edit (or corrupt file) can lock everyone out of it.
+  if (id === BOARD_DEFAULT.id) { board.read = ['all']; board.post = ['all']; }
+  return board;
 }
 
 // A post is { id, board, author, authorRef, server, text, tags[], replyTo, ts }.
@@ -2131,8 +2198,10 @@ setInterval(() => { try { if (pruneBoardStore() > 0) saveBoardStore(); } catch {
 // resolves its own identity into a common shape and hands it in, so the two
 // surfaces can never diverge in what gets stored or streamed:
 //   ident = { author, authorRef, server, role }
-// Access control (named boards, read/post lists) is item 2c and layers on top of
-// boardRead/boardPost — this item enforces only that the board exists.
+// Access control (plan item 2c) is enforced HERE, in the shared core, via
+// boardAclAllows(board, ident, 'read'|'post') — so BOTH surfaces and the SSE
+// stream apply the exact same policy and a named board can never leak posts or
+// accept a write through one surface while refusing it on the other.
 const BOARD_DEFAULT_LIMIT = 50;
 const BOARD_MAX_LIMIT = 200;
 
@@ -2142,6 +2211,18 @@ const boardSubs = new Set();
 function boardById(id) {
   const want = String(id || BOARD_DEFAULT.id).trim().toLowerCase() || BOARD_DEFAULT.id;
   return BOARD.boards.find(b => b.id === want) || null;
+}
+
+// The public shape of a board: name/description for the picker only. The ACL
+// rule lists are never echoed to a read caller (admins see them at /api/boards).
+function boardPublic(b) { return { id: b.id, name: b.name, description: b.description }; }
+
+// An ACL refusal is a security-relevant event: count it and audit it (no post
+// body, no secret — just who, which board, and which operation).
+function auditBoardDenied(boardId, ident, kind, via) {
+  METRICS.boardAclDenied++;
+  audit('board_acl_denied', (ident && ident.authorRef) || (ident && ident.author) || '?',
+    (ident && ident.role) || 'anon', { board: String(boardId || '').toLowerCase(), kind, via: via || 'human' });
 }
 
 function boardLimit(n) {
@@ -2155,9 +2236,10 @@ function boardLimit(n) {
 // cursor without re-reading the whole board. A `since` that has been pruned
 // falls back to the newest window. `boards` rides along so a UI/agent can
 // render the picker without a second call.
-function boardRead({ boardId, since, limit } = {}) {
+function boardRead({ boardId, since, limit } = {}, ident) {
   const board = boardById(boardId);
   if (!board) return { error: 'no such board', status: 404 };
+  if (!boardAclAllows(board, ident, 'read')) return { error: 'forbidden', status: 403, denied: true };
   const all = BOARD.posts.filter(p => p.board === board.id);
   let posts;
   if (since) {
@@ -2167,7 +2249,10 @@ function boardRead({ boardId, since, limit } = {}) {
     posts = all.slice(-boardLimit(limit));
   }
   const cursor = posts.length ? posts[posts.length - 1].id : (since || null);
-  return { board, boards: BOARD.boards.map(b => ({ ...b })), posts, cursor };
+  // The picker carries only the boards this caller may read; ACL rules stay out
+  // of the response (admins read them via GET /api/boards).
+  const boards = BOARD.boards.filter(b => boardAclAllows(b, ident, 'read')).map(boardPublic);
+  return { board: boardPublic(board), boards, posts, cursor };
 }
 
 // A post id that sorts by append time and is collision-resistant: base-36
@@ -2182,6 +2267,7 @@ function newPostId() {
 function boardPost({ boardId, text, tags, replyTo } = {}, ident) {
   const board = boardById(boardId);
   if (!board) return { error: 'no such board', status: 404 };
+  if (!boardAclAllows(board, ident, 'post')) return { error: 'forbidden', status: 403, denied: true };
   const body = String(text == null ? '' : text).trim();
   if (!body) return { error: 'text required', status: 400 };
   const post = normalizePost({
@@ -2202,6 +2288,36 @@ function boardPost({ boardId, text, tags, replyTo } = {}, ident) {
   METRICS.boardPosts++;
   boardBroadcast(post);
   return { post };
+}
+
+// ── Admin board management (plan item 2c) ───────────────────────────────────
+// Boards are admin-created; this is where a board's name/description and its
+// read/post access lists are set. The `general` board is protected: it can
+// never be locked down, renamed away from the all/all policy, or removed. Every
+// change is audited. (Board deletion is deliberately not exposed — no state
+// removal path from the API.)
+function boardUpsert(input) {
+  if (!input || typeof input !== 'object') return { error: 'bad body' };
+  const id = String(input.id || '').trim().toLowerCase().slice(0, 64);
+  if (!id || !/^[a-z0-9][a-z0-9_-]*$/.test(id)) return { error: 'invalid board id' };
+  const existing = boardById(id) || null;
+  const next = normalizeBoard({
+    id,
+    name: input.name != null ? input.name : (existing && existing.name),
+    description: input.description != null ? input.description : (existing && existing.description),
+    read: input.read != null ? input.read : (existing && existing.read),
+    post: input.post != null ? input.post : (existing && existing.post),
+  });
+  if (!next) return { error: 'invalid board' };
+  if (id === BOARD_DEFAULT.id) { next.read = ['all']; next.post = ['all']; }
+  if (existing) {
+    existing.name = next.name; existing.description = next.description;
+    existing.read = next.read; existing.post = next.post;
+  } else {
+    BOARD.boards.push(next);
+  }
+  saveBoardStore();
+  return { board: next, created: !existing };
 }
 
 function boardBroadcast(post) {
@@ -2811,6 +2927,7 @@ const METRICS = {
   rateLimited: 0,
   agentRateLimited: 0,
   boardPosts: 0,
+  boardAclDenied: 0,
 };
 
 // One structured log line. `logFormat:"json"` (the default) emits a JSON object
@@ -2921,6 +3038,7 @@ function metrics(res, req) {
   metric('cirrus_portal_rate_limited_total', 'counter', 'Requests rejected by the per-IP rate limit.', [`cirrus_portal_rate_limited_total ${METRICS.rateLimited}`]);
   metric('cirrus_portal_agent_rate_limited_total', 'counter', 'Agent API requests rejected by the per-token rate limit.', [`cirrus_portal_agent_rate_limited_total ${METRICS.agentRateLimited}`]);
   metric('cirrus_portal_board_posts_total', 'counter', 'Bulletin-board posts appended since start.', [`cirrus_portal_board_posts_total ${METRICS.boardPosts}`]);
+  metric('cirrus_portal_board_acl_denied_total', 'counter', 'Bulletin-board reads/writes refused by board access control.', [`cirrus_portal_board_acl_denied_total ${METRICS.boardAclDenied}`]);
   metric('cirrus_portal_audit_entries', 'gauge', 'Lines currently in the audit log.', [`cirrus_portal_audit_entries ${auditLineCount()}`]);
   res.writeHead(200, { 'Content-Type': 'text/plain; version=0.0.4; charset=utf-8' });
   res.end(L.join('\n') + '\n');
@@ -3406,11 +3524,13 @@ async function handleApi(req, res, url) {
   // gate above already covered the POST). The agent surface
   // (/api/agent/board*) shares the exact same read/post core.
   if (p === '/api/board' && req.method === 'GET') {
+    const bid = boardIdentFromUser(user);
     const r = boardRead({
       boardId: url.searchParams.get('board'),
       since: url.searchParams.get('since') || '',
       limit: url.searchParams.get('limit'),
-    });
+    }, bid);
+    if (r.denied) auditBoardDenied(url.searchParams.get('board'), bid, 'read', 'human');
     if (r.error) return json(res, r.status || 404, { error: r.error });
     return json(res, 200, { ok: true, ...r });
   }
@@ -3418,10 +3538,12 @@ async function handleApi(req, res, url) {
   if (p === '/api/board/post' && req.method === 'POST') {
     const body = await readBody(req);
     if (!body) return json(res, 400, { error: 'bad body' });
+    const bid = boardIdentFromUser(user);
     const r = boardPost(
       { boardId: body.board, text: body.text, tags: body.tags, replyTo: body.replyTo },
-      boardIdentFromUser(user),
+      bid,
     );
+    if (r.denied) auditBoardDenied(body.board, bid, 'post', 'human');
     if (r.error) return json(res, r.status || 400, { error: r.error });
     audit('board_post', user.username, user.role, { id: r.post.id, board: r.post.board });
     return json(res, 200, { ok: true, post: r.post });
@@ -3429,7 +3551,14 @@ async function handleApi(req, res, url) {
 
   if (p === '/api/board/stream' && req.method === 'GET') {
     const boardId = url.searchParams.get('board') || BOARD_DEFAULT.id;
-    if (!boardById(boardId)) return json(res, 404, { error: 'no such board' });
+    const board = boardById(boardId);
+    if (!board) return json(res, 404, { error: 'no such board' });
+    // A live stream is a read: refuse one this caller may not read, so the SSE
+    // path can never leak posts from a restricted board.
+    if (!boardAclAllows(board, boardIdentFromUser(user), 'read')) {
+      auditBoardDenied(boardId, boardIdentFromUser(user), 'read', 'human');
+      return json(res, 403, { error: 'forbidden' });
+    }
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
@@ -3441,6 +3570,32 @@ async function handleApi(req, res, url) {
     const ping = setInterval(() => { try { res.write('event: ping\ndata: {}\n\n'); } catch { /* dead */ } }, 20000);
     req.on('close', () => { clearInterval(ping); boardUnsubscribe(sub); });
     return; // keep open
+  }
+
+  // ── Admin board management (plan item 2c) ────────────────────────────
+  // Admin-only. GET lists every board with its access lists + post count;
+  // POST upserts a board (create or edit name/description/read/post). The
+  // general board cannot be locked down. No delete path exists.
+  if (p === '/api/boards' && req.method === 'GET') {
+    if (!requireRole(user, 'admin')) return json(res, 403, { error: 'admins only' });
+    const boards = BOARD.boards.map(b => ({
+      ...boardPublic(b),
+      read: b.read.slice(),
+      post: b.post.slice(),
+      posts: BOARD.posts.filter(pp => pp.board === b.id).length,
+    }));
+    return json(res, 200, { boards });
+  }
+
+  if (p === '/api/boards' && req.method === 'POST') {
+    if (!requireRole(user, 'admin')) return json(res, 403, { error: 'admins only' });
+    const body = await readBody(req);
+    if (!body) return json(res, 400, { error: 'bad body' });
+    const r = boardUpsert(body);
+    if (r.error) return json(res, 400, { error: r.error });
+    audit(r.created ? 'board_create' : 'board_update', user.username, user.role,
+      { id: r.board.id, read: r.board.read, post: r.board.post });
+    return json(res, 200, { ok: true, created: r.created, board: { ...r.board } });
   }
 
   // ── Admin / instructor management ──
