@@ -54,7 +54,7 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
 - [x] **4c. Sync reply** — `awaitReply:true` returns the recipient's next assistant message (reuse `state:final` + `runId` watcher). ✅ 2026-09-26 (`b4c898e`)
 - [x] **4d. Loop safety** — hop counter (max 3), per-pair rate limit, burst budget, no-relay flag, circuit breaker. ✅ 2026-09-26 (`793299b`)
 - [x] **4e. Privacy** — content hidden from admin by default, server-side; `agentDmVisibility` switch; **agents are told** the current visibility and the flip is audited. ✅ 2026-09-26 (`ba4f065`)
-- [ ] **4f. Agent DM tab UI** — live traffic, per-pair threads, delivery/reply state.
+- [x] **4f. Agent DM tab UI** — live traffic, per-pair threads, delivery/reply state. ✅ 2026-09-26 (`59f58bf`)
 - [ ] **4g. Tests** — cross-gateway delivery, awaitReply, **loop regression**, privacy on/off.
 
 ## Phase 5 — Ship to the running server (Dad can see it)
@@ -370,3 +370,28 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
   unknown value 400 no-change · 0600 store + policy survives restart) · test-agent-dm-{store,route,sync,loop}
   6/6·10/10·9/9·7/7 · test/config 4/4 · `node --check` · lint + secret-scan clean · `run-tests.sh` all green.
   Next: 4f (Agent DM tab UI).
+- **2026-09-26 15:16** — ✅ **4f done** (`59f58bf`). The **Agent DM tab** — the observable face of the
+  cross-server DM feature. New **Agent DM** nav item for admins only (the whole feed is admin-only), a
+  two-pane view: a **per-pair picker** (each conversation pair + message count + last state, agent filter)
+  and a **live transcript** (from → to, state chip, `sync`/`hop N`/`no-relay` chips, per-message delivery/
+  reply state). Live traffic arrives on a NEW admin-only SSE surface
+  **`GET /api/agent-dms/stream`** — the SSE twin of the board stream — which broadcasts every DM state
+  change (queued → delivered → replied|failed) plus a **`policy`** frame when the visibility flips, and a
+  `hello` frame carrying the current policy so the banner is right on first paint. **Privacy is enforced on
+  the wire**: every frame is a `dmAdminView`, so in private mode a body never reaches the SSE stream (the UI
+  renders the `redacted` flag + a `textLength` size hint, and only reads `dm.text` when the server sends it).
+  The tab also exposes the 4e switch (`POST /api/agent-dms/visibility`, confirm-gated) so Dad can flip
+  bodies visible↔private from the UI. Server wiring: `dmBroadcast(dm)` into the 4b router (all three save
+  points) + `dmBroadcastPolicy()` into the 4e flip. **The tab deliberately shows only what the server
+  hands it — it can never reveal more than the policy allows.** No config keys added (no drift). Preview
+  `portal-preview` untouched: it runs its OWN 2d-era copy of `portal-server.js`/`portal.html` (a snapshot
+  under `portal-preview/`, NOT the branch bind-mounted), so the new `/api/agent-dms/stream` endpoint + tab
+  will appear there only when the preview is refreshed — a later ship step, not this item. Production
+  `agent-portal` untouched. Evidence:
+  `test-agent-dm-ui.js` **6/6** (static wiring incl. the exact DM fields the bubble reads · inline script
+  compiles · stream is admin-only 401 anon/403 non-admin · live `dm` frame carries from/to/ts/state AND the
+  private body stays OFF the wire · an answered `awaitReply` DM emits a `replied` frame carrying the reply ·
+  privacy across a private↔visible flip: body hidden → `policy` frame → body revealed) · test-agent-dm-{route,
+  store,sync,loop,privacy} 10/10·6/6·9/9·7/7·6/6 · `node --check` · node:test **24/24** ·
+  `run-tests.sh` **all green** (36 standalone suites) · lint + secret-scan clean. Next: 4g (Phase-4 DM gate —
+  cross-gateway delivery, awaitReply, loop regression, privacy on/off).
