@@ -8,6 +8,8 @@ portal-device.json
 portal-users.json
 portal-rooms.json
 portal-context.json
+portal-board.json
+portal-board.json.tmp
 portal-audit.log
 portal.log
 

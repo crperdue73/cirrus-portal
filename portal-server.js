@@ -34,6 +34,7 @@ const USERS_PATH = path.join(DIR, 'portal-users.json');
 const AUDIT_PATH = path.join(DIR, 'portal-audit.log');
 const ROOMS_PATH = path.join(DIR, 'portal-rooms.json');
 const CONTEXT_PATH = path.join(DIR, 'portal-context.json');
+const BOARD_PATH = path.join(DIR, 'portal-board.json');
 const BRANDING_PATH = path.join(DIR, 'branding.json');
 
 // Single source of truth for product identity (see NAMING.md / branding.json).
@@ -95,6 +96,13 @@ const DEFAULTS = {
   agentRateLimitPerMinute: 120, // per-token request budget for /api/agent/*
   agentRateLimitBurst: 40,      // extra allowance above the steady rate, per window
   agentMaxBodyBytes: 64 * 1024, // agent bodies are small; cap well under the global 1 MB
+  // Bulletin board store (plan item 2a) — same bounded-on-disk discipline as
+  // the audit log: keep by age (0 = keep forever, the default: never silently
+  // drop Dad's posts), plus hard count/byte caps so a busy fleet can't grow
+  // portal-board.json without bound.
+  boardRetentionDays: 0,        // posts older than this are pruned (0 = keep forever)
+  boardMaxPosts: 2000,          // hard count cap; oldest posts dropped past it
+  boardMaxBytes: 2 * 1024 * 1024, // hard size cap; oldest posts trimmed past it
 };
 
 // ── Credential safety ────────────────────────────────────────────────────────
@@ -250,6 +258,9 @@ function loadConfig() {
     PORTAL_AGENT_RATE_LIMIT_PER_MINUTE: 'agentRateLimitPerMinute',
     PORTAL_AGENT_RATE_LIMIT_BURST: 'agentRateLimitBurst',
     PORTAL_AGENT_MAX_BODY_BYTES: 'agentMaxBodyBytes',
+    PORTAL_BOARD_RETENTION_DAYS: 'boardRetentionDays',
+    PORTAL_BOARD_MAX_POSTS: 'boardMaxPosts',
+    PORTAL_BOARD_MAX_BYTES: 'boardMaxBytes',
   };
   for (const [envKey, cfgKey] of Object.entries(envMap)) {
     if (process.env[envKey] !== undefined) {
@@ -1983,6 +1994,109 @@ function readAudit(limit) {
     return [];
   }
 }
+
+// ── Bulletin board store (plan item 2a) ─────────────────────────────────────
+// One durable JSON document (0600, bind-mounted) holds every board and its
+// posts. Boards are named; the *general* board always exists. Posts are an
+// append-mostly list, bounded on disk exactly like the audit log:
+//   • boardRetentionDays — posts older than the window are pruned (0 = keep)
+//   • boardMaxPosts      — hard count cap; oldest posts dropped past it
+//   • boardMaxBytes      — hard size cap; oldest posts trimmed past it
+// Pruning always keeps at least the newest BOARD_KEEP_MIN posts. The store is
+// the single source of truth for board definitions + post order; access
+// control (2c) and the HTTP surface (2b) are layered on top of it. Identity
+// (author / authorRef / server) is resolved per caller by 2b/2c — the store
+// only normalizes and persists whatever it is handed.
+const BOARD_KEEP_MIN = 10;
+const BOARD_DEFAULT = { id: 'general', name: 'General', description: 'Fleet-wide bulletin board — everyone reads and posts.' };
+
+function boardRetentionDays() { return Math.max(0, Number(CONFIG.boardRetentionDays) || 0); }
+function boardMaxPosts() { return Math.max(BOARD_KEEP_MIN, Number(CONFIG.boardMaxPosts) || 2000); }
+function boardMaxBytes() { return Math.max(64 * 1024, Number(CONFIG.boardMaxBytes) || 2 * 1024 * 1024); }
+
+// A board is { id, name, description }. The id is the stable key (lowercased).
+function normalizeBoard(b) {
+  if (!b || typeof b !== 'object') return null;
+  const id = String(b.id || '').trim().toLowerCase().slice(0, 64);
+  if (!id) return null;
+  return {
+    id,
+    name: String(b.name || id).trim().slice(0, 80) || id,
+    description: String(b.description || '').slice(0, 280),
+  };
+}
+
+// A post is { id, board, author, authorRef, server, text, tags[], replyTo, ts }.
+// Posts with no text are dropped (nothing to read); every field is clamped so
+// an untrusted caller can't wedge a huge blob into the state file.
+function normalizePost(p) {
+  if (!p || typeof p !== 'object') return null;
+  const text = String(p.text == null ? '' : p.text).slice(0, 8000);
+  if (!text) return null;
+  return {
+    id: String(p.id || '').slice(0, 64),
+    board: String(p.board || BOARD_DEFAULT.id).trim().toLowerCase().slice(0, 64) || BOARD_DEFAULT.id,
+    author: String(p.author || 'unknown').slice(0, 80),
+    authorRef: String(p.authorRef || '').slice(0, 120),
+    server: String(p.server || '').slice(0, 80),
+    text,
+    tags: Array.isArray(p.tags) ? p.tags.map(t => String(t).slice(0, 40)).filter(Boolean).slice(0, 12) : [],
+    replyTo: p.replyTo ? String(p.replyTo).slice(0, 64) : null,
+    ts: Number(p.ts) || Date.now(),
+  };
+}
+
+function loadBoardStore() {
+  const store = { boards: [{ ...BOARD_DEFAULT }], posts: [] };
+  try {
+    const raw = JSON.parse(fs.readFileSync(BOARD_PATH, 'utf8'));
+    if (raw && Array.isArray(raw.boards)) {
+      const seen = new Set();
+      const boards = [];
+      for (const b of raw.boards) {
+        const n = normalizeBoard(b);
+        if (n && !seen.has(n.id)) { seen.add(n.id); boards.push(n); }
+      }
+      if (!seen.has(BOARD_DEFAULT.id)) boards.unshift({ ...BOARD_DEFAULT });
+      store.boards = boards;
+    }
+    if (raw && Array.isArray(raw.posts)) store.posts = raw.posts.map(normalizePost).filter(Boolean);
+  } catch (e) { /* first run (ENOENT) or a corrupt file — fall back to defaults */ }
+  return store;
+}
+
+// Persist the store 0600. Uses the read-only-rootfs-safe writer (plan item 8).
+function saveBoardStore() {
+  try {
+    const data = JSON.stringify({ boards: BOARD.boards, posts: BOARD.posts.slice(-boardMaxPosts()) }, null, 2);
+    writeFileRobust(BOARD_PATH, data, 0o600);
+  } catch (e) {
+    console.error('[portal] failed to write board file:', e.message);
+  }
+}
+
+// Apply the retention bounds in place. Returns the number of posts removed.
+// Never throws; board maintenance must never break the portal.
+function pruneBoardStore(now = Date.now()) {
+  let removed = 0;
+  try {
+    const before = BOARD.posts.length;
+    const days = boardRetentionDays();
+    const cutoff = days > 0 ? now - days * 86400_000 : 0;
+    let kept = cutoff > 0 ? BOARD.posts.filter(p => (p.ts || 0) >= cutoff) : BOARD.posts.slice();
+    while (kept.length > boardMaxPosts()) kept.shift();
+    const maxBytes = boardMaxBytes();
+    while (kept.length > BOARD_KEEP_MIN && Buffer.byteLength(JSON.stringify(kept), 'utf8') > maxBytes) kept.shift();
+    removed = before - kept.length;
+    if (removed > 0) BOARD.posts = kept;
+  } catch (e) { /* board maintenance must never break the portal */ }
+  return removed;
+}
+
+const BOARD = loadBoardStore();
+// Bound the store at boot (then persist so the file exists 0600 on first run).
+try { pruneBoardStore(); saveBoardStore(); } catch { /* never fatal */ }
+setInterval(() => { try { if (pruneBoardStore() > 0) saveBoardStore(); } catch { /* never fatal */ } }, 6 * 3600_000).unref();
 
 // ── Group chat rooms (panel mode, Aug 3 2026) ───────────────────────────────
 // A room is 2+ agents plus a shared transcript. A *round* sends the full

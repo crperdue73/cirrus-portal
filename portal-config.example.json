@@ -28,5 +28,8 @@
   "maxBodyBytes": 1048576,
   "agentRateLimitPerMinute": 120,
   "agentRateLimitBurst": 40,
-  "agentMaxBodyBytes": 65536
+  "agentMaxBodyBytes": 65536,
+  "boardRetentionDays": 0,
+  "boardMaxPosts": 2000,
+  "boardMaxBytes": 2097152
 }

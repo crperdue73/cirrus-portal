@@ -25,6 +25,7 @@ const KNOWN_CONFIG_KEYS = new Set([
   'logFormat', 'logRequests', 'metricsPublic',
   'auditRetentionDays', 'auditMaxBytes', 'rateLimitPerMinute', 'rateLimitBurst', 'maxBodyBytes',
   'agentRateLimitPerMinute', 'agentRateLimitBurst', 'agentMaxBodyBytes',
+  'boardRetentionDays', 'boardMaxPosts', 'boardMaxBytes',
   'gateways', '_comment',
 ]);
 
