@@ -41,7 +41,7 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
 - [x] **2b. API** — `GET /api/board`, `POST /api/board/post`, `GET /api/board/stream` (SSE); identity resolved from session *or* agent token. ✅ 2026-09-26 (`297c24b`)
 - [x] **2c. Access control** — `general` open to all; named boards carry `read`/`post` lists (all | explicit agents/roles), enforced server-side on read **and** write. ✅ 2026-09-26 (`7c8dd69`)
 - [x] **2d. Board tab UI** — board picker, live transcript, composer (Dad posts as *Robbie · portal*), author/server filter, unread badge. ✅ 2026-09-26 (`f630254`)
-- [ ] **2e. Notify** — unread cursor + heartbeat pull; `@agent` mention-wake (opt-in).
+- [x] **2e. Notify** — unread cursor + heartbeat pull; `@agent` mention-wake (opt-in). ✅ 2026-09-26 (`4514d06`)
 - [ ] **2f. Tests** — post/read/pagination, per-board ACL, retention, live stream.
 
 ## Phase 3 — Phone book
@@ -190,3 +190,20 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
   creds reported to Dad in the run report. Bind is scoped to the specific LAN IP (not `0.0.0.0`); the ufw
   fleet-subnet rule stays a migration-window step. **5d is deliberately NOT ticked** (this is a click-now preview;
   5d is the formal ship step). Loop continues at 2e.
+- **2026-09-26 06:16** — ✅ **2e done** (`4514d06`). Board notify. **Pull** (the v1 path): a per-identity
+  read cursor per board, tracked server-side on the identity's `authorRef` (`agent:<gw>:<id>` /`user:<name>`) so
+  a cursor can't drift from its author. `GET /api/agent/board/unread` (+ human `/api/board/unread`) returns exact
+  unread counts + the pending window **oldest-first** (so a heartbeat poller consumes in order; `more:true` flags a
+  truncated window); `POST …/board/ack` advances the cursor — **monotonic**, so a stale/replayed ack can never
+  re-open consumed posts, and an unknown id is refused (400) with no change. Cursors persist in `portal-board.json`
+  (0600) and are bounded (least-recently-touched dropped past 500 identities). Both surfaces call the SAME core,
+  gated by the 2c read ACL (unread/ack of a restricted board 403s and writes no cursor). **Push** (opt-in, default
+  OFF via new key `boardMentionWake` + `PORTAL_BOARD_MENTION_WAKE`): a post naming a reachable agent `@mention`
+  injects a short pointer into that agent's session — loop-safe by construction (never self-wakes the author; 60s
+  per-target cooldown; ≤5 targets/post; 30/min global budget; every decision audited `board_mention_wake` /
+  `_unrouted` / `_suppressed`). Posts now carry a parsed `mentions` field (lowercased/de-duped/capped); adds audit
+  events (`board_ack`, `board_mention_*`) and the `cirrus_portal_board_wakes_total` metric. Evidence:
+  `test-board-notify.js` **10/10** · test-board-{store,api,acl,ui} 6/6·7/7·7/7·6/6 · test-agent-api 6/6 ·
+  node:test 24/24 · lint + secret-scan clean · `run-tests.sh` all green. Note: the global-budget branch is
+  code-covered but not exercised by a test (it needs a routable target → a live gateway); flag for 2f if a fake
+  gateway lands. Next: 2f (board test suite).
