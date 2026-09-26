@@ -35,6 +35,7 @@ const AUDIT_PATH = path.join(DIR, 'portal-audit.log');
 const ROOMS_PATH = path.join(DIR, 'portal-rooms.json');
 const CONTEXT_PATH = path.join(DIR, 'portal-context.json');
 const BOARD_PATH = path.join(DIR, 'portal-board.json');
+const DM_PATH = path.join(DIR, 'portal-agent-dm.json');
 const BRANDING_PATH = path.join(DIR, 'branding.json');
 
 // Single source of truth for product identity (see NAMING.md / branding.json).
@@ -103,6 +104,14 @@ const DEFAULTS = {
   boardRetentionDays: 0,        // posts older than this are pruned (0 = keep forever)
   boardMaxPosts: 2000,          // hard count cap; oldest posts dropped past it
   boardMaxBytes: 2 * 1024 * 1024, // hard size cap; oldest posts trimmed past it
+  // Agent DM mailbox (plan item 4a) — cross-server agent direct messages. Same
+  // bounded-on-disk discipline as the board + audit log. Age-pruning never
+  // drops an in-flight (queued/delivered) DM, and the hard caps drop oldest
+  // terminal DMs before touching in-flight ones, so a busy fleet can't silently
+  // lose a message that is still being delivered.
+  agentDmRetentionDays: 0,        // DMs older than this are pruned (0 = keep forever)
+  agentDmMaxMessages: 5000,       // hard count cap; oldest DMs dropped past it
+  agentDmMaxBytes: 4 * 1024 * 1024, // hard size cap; oldest DMs trimmed past it
   // Board notify (plan item 2e) — @agent mention-wake is OPT-IN and off by
   // default. The v1 notify path is PULL (a per-identity unread cursor an agent
   // reads on its heartbeat); the wake push stays dark until the operator turns
@@ -266,6 +275,9 @@ function loadConfig() {
     PORTAL_BOARD_RETENTION_DAYS: 'boardRetentionDays',
     PORTAL_BOARD_MAX_POSTS: 'boardMaxPosts',
     PORTAL_BOARD_MAX_BYTES: 'boardMaxBytes',
+    PORTAL_AGENT_DM_RETENTION_DAYS: 'agentDmRetentionDays',
+    PORTAL_AGENT_DM_MAX_MESSAGES: 'agentDmMaxMessages',
+    PORTAL_AGENT_DM_MAX_BYTES: 'agentDmMaxBytes',
   };
   for (const [envKey, cfgKey] of Object.entries(envMap)) {
     if (process.env[envKey] !== undefined) {
@@ -2707,6 +2719,126 @@ function boardIdentFromAgent(rec) {
   const id = (rec && rec.agentId) || 'agent';
   return { author: id, authorRef: 'agent:' + (gw ? gw + ':' + id : id), server: gw, role: 'agent' };
 }
+
+// ── Agent DM mailbox store (plan item 4a) ───────────────────────────────────
+// Cross-server agent direct messaging (Phase 4). One durable JSON document
+// (0600, bind-mounted) holds every DM and its delivery state. Bounded on disk
+// exactly like the board + audit log:
+//   • agentDmRetentionDays — age-prunes only TERMINAL DMs (0 = keep forever,
+//     the default). An in-flight (queued/delivered) DM is never aged out, so a
+//     slow recipient can't lose a message to the clock.
+//   • agentDmMaxMessages   — hard count cap; the oldest DMs are dropped first,
+//     terminal before in-flight, so the cap never sacrifices a message that is
+//     still being delivered until only in-flight records remain.
+//   • agentDmMaxBytes      — hard size cap; same drop order.
+// Pruning always keeps at least the newest DM_KEEP_MIN DMs. The store is the
+// single source of truth for DM order + delivery state; routing (4b), sync
+// replies (4c) and loop safety (4d) are layered on top. There is no HTTP
+// surface here — the API lives with the router so every write goes through one
+// code path.
+//
+// A DM is { id, from, to, text, ts, state, reply, replyTs, hops, awaitReply }.
+// `from`/`to` are caller refs (`agent:<gw>:<id>` / `user:<name>`); the router
+// (4b) resolves and stamps `toGateway`/`toAgent`. `state` is one of queued |
+// delivered | replied | failed. `hops` (0..DM_HOPS_MAX) is the loop counter
+// (4d); `awaitReply` asks the router to hold a sync request (4c).
+const DM_KEEP_MIN = 10;
+const DM_HOPS_MAX = 3;        // hard loop bound (plan item 4d) — clamped by normalization
+const DM_TEXT_MAX = 8000;     // per-message body cap (matches board posts)
+const DM_STATES = new Set(['queued', 'delivered', 'replied', 'failed']);
+
+function dmRetentionDays() { return Math.max(0, Number(CONFIG.agentDmRetentionDays) || 0); }
+function dmMaxMessages() { return Math.max(DM_KEEP_MIN, Number(CONFIG.agentDmMaxMessages) || 5000); }
+function dmMaxBytes() { return Math.max(64 * 1024, Number(CONFIG.agentDmMaxBytes) || 4 * 1024 * 1024); }
+
+// Terminal states are finished; only these may be dropped by prune.
+function dmIsTerminal(dm) { return !!dm && (dm.state === 'replied' || dm.state === 'failed'); }
+
+// A DM is { id, from, to, text, ts, state, reply, replyTs, hops, awaitReply }.
+// Every field is clamped so an untrusted caller (or a corrupt file) can't wedge
+// a huge blob, a bogus state or an unbounded hop count into the state file.
+function normalizeDm(d) {
+  if (!d || typeof d !== 'object') return null;
+  const from = String(d.from == null ? '' : d.from).slice(0, 200).trim();
+  const to = String(d.to == null ? '' : d.to).slice(0, 200).trim();
+  const text = String(d.text == null ? '' : d.text).slice(0, DM_TEXT_MAX);
+  if (!from || !to || !text) return null; // a DM needs a sender, a recipient and a body
+  const state = DM_STATES.has(String(d.state)) ? String(d.state) : 'queued';
+  const hopsRaw = Number(d.hops);
+  const hops = Math.max(0, Math.min(DM_HOPS_MAX, Number.isFinite(hopsRaw) ? Math.floor(hopsRaw) : 0));
+  return {
+    id: String(d.id || '').slice(0, 64),
+    from,
+    to,
+    toGateway: String(d.toGateway || '').slice(0, 80),
+    toAgent: String(d.toAgent || '').slice(0, 80),
+    text,
+    ts: Number(d.ts) || Date.now(),
+    state,
+    reply: d.reply == null ? null : String(d.reply).slice(0, DM_TEXT_MAX),
+    replyTs: Number(d.replyTs) || 0,
+    deliveredTs: Number(d.deliveredTs) || 0,
+    hops,
+    awaitReply: d.awaitReply === true,
+    error: d.error ? String(d.error).slice(0, 300) : null,
+  };
+}
+
+function loadDmStore() {
+  const store = { dms: [] };
+  try {
+    const raw = JSON.parse(fs.readFileSync(DM_PATH, 'utf8'));
+    if (raw && Array.isArray(raw.dms)) store.dms = raw.dms.map(normalizeDm).filter(Boolean);
+  } catch { /* first run (ENOENT) or a corrupt file — fall back to empty */ }
+  return store;
+}
+
+// Persist the store 0600 (read-only-rootfs-safe writer, plan item 8).
+function saveDmStore() {
+  try {
+    const data = JSON.stringify({ dms: DM.dms.slice(-dmMaxMessages()) }, null, 2);
+    writeFileRobust(DM_PATH, data, 0o600);
+  } catch (e) {
+    console.error('[portal] failed to write agent-dm file:', e.message);
+  }
+}
+
+// Drop entry `idx` and return the new array (used by dmTrim).
+function dmDropAt(list, idx) { return list.slice(0, idx).concat(list.slice(idx + 1)); }
+
+// Trim `list` while `over(list)` holds, dropping the oldest TERMINAL DM first and
+// only touching in-flight records when nothing else remains.
+function dmTrim(list, over) {
+  let out = list;
+  while (out.length > 0 && over(out)) {
+    let idx = out.findIndex(dmIsTerminal);
+    if (idx === -1) idx = 0;
+    out = dmDropAt(out, idx);
+  }
+  return out;
+}
+
+// Apply the retention bounds in place. Returns the number of DMs removed.
+// Never throws; DM maintenance must never break the portal.
+function pruneDmStore(now = Date.now()) {
+  let removed = 0;
+  try {
+    const before = DM.dms.length;
+    const days = dmRetentionDays();
+    const cutoff = days > 0 ? now - days * 86400_000 : 0;
+    let kept = cutoff > 0 ? DM.dms.filter(m => !dmIsTerminal(m) || (m.ts || 0) >= cutoff) : DM.dms.slice();
+    kept = dmTrim(kept, (arr) => arr.length > dmMaxMessages());
+    kept = dmTrim(kept, (arr) => arr.length > DM_KEEP_MIN && Buffer.byteLength(JSON.stringify(arr), 'utf8') > dmMaxBytes());
+    removed = before - kept.length;
+    if (removed > 0) DM.dms = kept;
+  } catch { /* DM maintenance must never break the portal */ }
+  return removed;
+}
+
+const DM = loadDmStore();
+// Bound the store at boot (then persist so the file exists 0600 on first run).
+try { pruneDmStore(); saveDmStore(); } catch { /* never fatal */ }
+setInterval(() => { try { if (pruneDmStore() > 0) saveDmStore(); } catch { /* never fatal */ } }, 6 * 3600_000).unref();
 
 // ── Group chat rooms (panel mode, Aug 3 2026) ───────────────────────────────
 // A room is 2+ agents plus a shared transcript. A *round* sends the full

@@ -26,6 +26,7 @@ const KNOWN_CONFIG_KEYS = new Set([
   'auditRetentionDays', 'auditMaxBytes', 'rateLimitPerMinute', 'rateLimitBurst', 'maxBodyBytes',
   'agentRateLimitPerMinute', 'agentRateLimitBurst', 'agentMaxBodyBytes',
   'boardRetentionDays', 'boardMaxPosts', 'boardMaxBytes', 'boardMentionWake',
+  'agentDmRetentionDays', 'agentDmMaxMessages', 'agentDmMaxBytes',
   'gateways', '_comment',
 ]);
 

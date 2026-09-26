@@ -46,7 +46,7 @@ PAT_LEGACY='perdue-portal-2026|pocket-aegis-root-2026'
 PAT_PERSONAL="[Rr]ob"'bie'
 PAT_PEM='BEGIN (RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY'
 # Runtime-state files that must never be tracked or shipped.
-PAT_FORBIDDEN='^(portal-config\.json|portal-config\.json\.bak.*|portal-secrets\.json|portal-device\.json|portal-users\.json|portal-rooms\.json|portal-context\.json|portal-audit\.log|portal\.log|install\.log|portal-credentials\.txt|portal-first-run\.txt)$'
+PAT_FORBIDDEN='^(portal-config\.json|portal-config\.json\.bak.*|portal-secrets\.json|portal-device\.json|portal-users\.json|portal-rooms\.json|portal-context\.json|portal-board\.json|portal-agent-dm\.json|portal-audit\.log|portal\.log|install\.log|portal-credentials\.txt|portal-first-run\.txt)$'
 
 count=0
 flag() { printf '  ✗ %s\n' "$1" >&2; printf '%s\n' "$1" >>"$FINDINGS"; count=$((count+1)); }
@@ -100,7 +100,8 @@ scan_tree() {
     flag "${p#"$base"/}: forbidden state/secret file present in $label"
   done < <(find "$base" -type f \( -name 'portal-config.json' -o -name 'portal-config.json.bak*' \
       -o -name 'portal-secrets.json' -o -name 'portal-device.json' -o -name 'portal-users.json' \
-      -o -name 'portal-rooms.json' -o -name 'portal-context.json' -o -name 'portal-audit.log' \
+      -o -name 'portal-rooms.json' -o -name 'portal-context.json' -o -name 'portal-board.json' \
+      -o -name 'portal-agent-dm.json' -o -name 'portal-audit.log' \
       -o -name 'portal.log' -o -name 'install.log' -o -name 'portal-credentials.txt' \
       -o -name 'portal-first-run.txt' \) 2>/dev/null)
 

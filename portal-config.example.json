@@ -32,5 +32,8 @@
   "boardRetentionDays": 0,
   "boardMaxPosts": 2000,
   "boardMaxBytes": 2097152,
-  "boardMentionWake": false
+  "boardMentionWake": false,
+  "agentDmRetentionDays": 0,
+  "agentDmMaxMessages": 5000,
+  "agentDmMaxBytes": 4194304
 }
