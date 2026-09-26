@@ -741,6 +741,29 @@ async function handleAgentApi(req, res, url) {
     return json(res, 200, { ok: true, ...r });
   }
 
+  // Phone book (plan item 3a): the FULL fleet roster for agents — every agent
+  // on every configured gateway, so an agent can discover who exists and how to
+  // address them cross-server (ref `gwId:agentId`). Deliberately NOT scoped to
+  // the caller: the phone book is the fleet, and a token only gates *access*.
+  // A token whose gateway is offline still gets the roster (it lists live agents
+  // and marks the caller's own gateway offline). Identity, not routing, is all
+  // this needs — no board/DM state is touched.
+  if (p === '/api/agent/roster' && req.method === 'GET') {
+    const roster = await buildRoster();
+    const gwId = rec.gatewayId || '';
+    const selfRef = gwId ? `${gwId}:${rec.agentId}` : rec.agentId;
+    audit('agent_call', rec.agentId, 'agent', { ...callDetail, status: 200 });
+    audit('agent_roster', rec.agentId, 'agent', { token: rec.id, agents: roster.agents.length, servers: roster.servers.length, connected: roster.connected });
+    return json(res, 200, {
+      ok: true,
+      you: { agentId: rec.agentId, gatewayId: gwId, ref: selfRef },
+      connected: roster.connected,
+      count: roster.agents.length,
+      agents: roster.agents,
+      servers: roster.servers,
+    });
+  }
+
   audit('agent_call', rec.agentId, 'agent', { ...callDetail, status: 404 });
   return json(res, 404, { error: 'not found' });
 }
@@ -1273,6 +1296,7 @@ function stopGateway(id) {
     GATEWAY_BY_ID.delete(id);
   }
   AGENT_REGISTRY.delete(id);
+  ROSTER_CACHE.delete(id);
   for (const ref of [...AGENT_NAMES.keys()]) {
     if (ref.startsWith(id + ':')) AGENT_NAMES.delete(ref);
   }
@@ -1360,6 +1384,75 @@ function clientForPortalSession(portalKey) {
   if (p.gwId) return gw(p.gwId);
   const t = resolveAgentRef(p.agentId);
   return t ? t.client : null;
+}
+
+// ── Phone book / roster (plan item 3a) ─────────────────────────────────────
+// The fleet roster: every agent on every configured gateway, flattened and
+// tagged with its gateway + a cross-server ref. Shared by the human Agent view
+// (`/api/agents`) and the agent phone book (`/api/agent/roster`, 3a), so both
+// see exactly the same fleet. ROSTER_CACHE keeps the last-known agents of a
+// gateway that has since gone offline, so the phone book still lists them
+// (marked reachable:false) instead of silently vanishing.
+const ROSTER_CACHE = new Map(); // gwId -> { agents: [...], at: ms }
+const ROSTER_CACHE_MAX_AGENTS = 500; // per-gateway cap so a rogue list can't grow memory
+
+function rosterAgentEntry(gwId, gwName, a, reachable, lastSeenAt) {
+  const id = String(a.id || a.agentId || '');
+  return {
+    id,
+    name: a.name || id,
+    emoji: (a.identity && a.identity.emoji) || a.emoji || '',
+    default: !!a.default,
+    server: gwId,
+    serverName: gwName,
+    ref: `${gwId}:${id}`,
+    key: `agent:${gwId}:${id}:main`,
+    reachable: reachable !== false,
+    lastSeenAt: lastSeenAt || null,
+  };
+}
+
+async function buildRoster() {
+  const results = await Promise.allSettled(
+    GATEWAYS.map(c => c.connected
+      ? c.request('agents.list', {}, 15000).then(payload => ({ client: c, payload }))
+      : Promise.resolve({ client: c, payload: null }))
+  );
+  const agents = [];
+  const servers = [];
+  for (const r of results) {
+    const value = r.status === 'fulfilled' && r.value ? r.value : null;
+    const client = value && value.client;
+    if (!client) continue;
+    const payload = value.payload;
+    if (!payload || !Array.isArray(payload.agents)) {
+      // Offline (or misbehaving): still surface the gateway, and replay its
+      // last-known agents marked unreachable so the phone book stays useful.
+      const cached = ROSTER_CACHE.get(client.id);
+      if (cached) for (const a of cached.agents) agents.push(rosterAgentEntry(client.id, client.name, a, false, cached.at));
+      servers.push({ id: client.id, name: client.name, connected: false, agentCount: cached ? cached.agents.length : 0, error: 'offline' });
+      continue;
+    }
+    const reg = new Map();
+    const live = [];
+    for (const a of payload.agents) {
+      const entry = rosterAgentEntry(client.id, client.name, a, true, Date.now());
+      reg.set(entry.id, { name: entry.name, emoji: entry.emoji, default: entry.default });
+      AGENT_NAMES.set(entry.ref, { name: entry.name, emoji: entry.emoji });
+      if (!AGENT_NAMES.has(entry.id)) AGENT_NAMES.set(entry.id, { name: entry.name, emoji: entry.emoji });
+      live.push(entry);
+      agents.push(entry);
+    }
+    ROSTER_CACHE.set(client.id, { agents: live.slice(0, ROSTER_CACHE_MAX_AGENTS), at: Date.now() });
+    AGENT_REGISTRY.set(client.id, reg);
+    servers.push({ id: client.id, name: client.name, connected: true, agentCount: payload.agents.length });
+  }
+  // Drop registries + caches for gateways that were removed from config.
+  for (const id of [...AGENT_REGISTRY.keys()]) if (!gw(id)) AGENT_REGISTRY.delete(id);
+  for (const id of [...ROSTER_CACHE.keys()]) if (!gw(id)) ROSTER_CACHE.delete(id);
+  const order = new Map(GATEWAYS.map((g, i) => [g.id, i]));
+  agents.sort((a, b) => (order.get(a.server) - order.get(b.server)) || String(a.name).localeCompare(String(b.name)));
+  return { agents, servers, connected: GATEWAYS.some(g => g.connected) };
 }
 
 // ── Tool receipts + confirmations (Phase I) ────────────────────────────────
@@ -3590,57 +3683,15 @@ async function handleApi(req, res, url) {
   }
 
   if (p === '/api/agents' && req.method === 'GET') {
-    // Fan out agents.list to every configured gateway and merge, tagging each
-    // agent with its server. One server down = its agents just don't appear
-    // (and the servers[] list says so); everything else keeps working.
-    const results = await Promise.allSettled(
-      GATEWAYS.map(c => c.connected
-        ? c.request('agents.list', {}, 15000).then(payload => ({ client: c, payload }))
-        : Promise.resolve({ client: c, payload: null }))
-    );
-    const agents = [];
-    const servers = [];
-    for (const r of results) {
-      const value = r.status === 'fulfilled' && r.value ? r.value : null;
-      const client = value && value.client;
-      if (!client) continue;
-      const payload = value.payload;
-      if (!payload || !Array.isArray(payload.agents)) {
-        servers.push({ id: client.id, name: client.name, connected: false, agentCount: 0, error: 'offline' });
-        continue;
-      }
-      const reg = new Map();
-      for (const a of payload.agents) {
-        const name = a.name || a.id;
-        const emoji = (a.identity && a.identity.emoji) || '';
-        reg.set(a.id, { name, emoji, default: !!a.default });
-        const ref = `${client.id}:${a.id}`;
-        AGENT_NAMES.set(ref, { name, emoji });
-        if (!AGENT_NAMES.has(a.id)) AGENT_NAMES.set(a.id, { name, emoji });
-        agents.push({
-          id: a.id,
-          name,
-          emoji,
-          default: !!a.default,
-          server: client.id,
-          serverName: client.name,
-          ref,
-          key: `agent:${client.id}:${a.id}:main`,
-        });
-      }
-      AGENT_REGISTRY.set(client.id, reg);
-      servers.push({ id: client.id, name: client.name, connected: true, agentCount: payload.agents.length });
-    }
-    // Drop registries for gateways that were removed from config.
-    for (const id of [...AGENT_REGISTRY.keys()]) if (!gw(id)) AGENT_REGISTRY.delete(id);
-    const order = new Map(GATEWAYS.map((g, i) => [g.id, i]));
-    agents.sort((a, b) => (order.get(a.server) - order.get(b.server)) || String(a.name).localeCompare(String(b.name)));
-    let visible = agents;
+    // Shared fleet roster (buildRoster fans out agents.list to every gateway
+    // and merges). One server down = its agents don't appear live (and the
+    // servers[] list says so); everything else keeps working.
+    const roster = await buildRoster();
+    let visible = roster.agents;
     if (user.role === 'student') {
-      visible = agents.filter(a => agentAllowed(user, a.ref));
+      visible = roster.agents.filter(a => agentAllowed(user, a.ref));
     }
-    const connected = GATEWAYS.some(g => g.connected);
-    return json(res, 200, { agents: visible, all: agents.length, servers, connected, restricted: user.role === 'student' });
+    return json(res, 200, { agents: visible, all: roster.agents.length, servers: roster.servers, connected: roster.connected, restricted: user.role === 'student' });
   }
 
   if (p === '/api/history' && req.method === 'GET') {
