@@ -45,7 +45,7 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
 - [x] **2f. Tests** — post/read/pagination, per-board ACL, retention, live stream. ✅ 2026-09-26 (`fc650bd`)
 
 ## Phase 3 — Phone book
-- [ ] **3a. `GET /api/agent/roster`** — every agent on every gateway: id, name, emoji, gateway, cross-server ref, reachability status.
+- [x] **3a. `GET /api/agent/roster`** — every agent on every gateway: id, name, emoji, gateway, cross-server ref, reachability status. ✅ 2026-09-26 (`9862450`)
 - [ ] **3b. Tests** — merges gateways, marks offline servers, token-scoped.
 
 ## Phase 4 — Cross-server agent DM
@@ -221,3 +221,19 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
   token reaches the log. Test-only; no `portal-server.js` change. Evidence: `node --check` · `test-board-gate.js`
   5/5 · test-board-{store,api,acl,ui,notify} 6/6·7/7·7/7·6/6·10/10 · node:test **24/24** · lint + secret-scan
   clean · `run-tests.sh` all green. **Phase 2 complete** — next is Phase 3 (phone book, 3a).
+- **2026-09-26 08:16** — ✅ **3a done** (`9862450`). The phone book: `GET /api/agent/roster` (Bearer-authed,
+  `/api/agent/*` only) returns **every agent on every configured gateway** — `{id,name,emoji,default,server,
+  serverName,ref,key,reachable,lastSeenAt}` — so an agent can discover and address the whole fleet
+  cross-server. Factored the gateway fan-out out of the human `/api/agents` handler into a shared
+  `buildRoster()` so both surfaces can never diverge (`/api/agents` keeps its student filter). A
+  configured-but-down gateway is listed `connected:false` (`error:'offline'`) and its last-known agents are
+  replayed from a new bounded `ROSTER_CACHE` marked `reachable:false` — the phone book stays useful instead of
+  failing the call or silently dropping the server. The endpoint is deliberately **not** caller-scoped (the
+  phone book *is* the fleet; the token only gates access) and echoes `you:{agentId,gatewayId,ref}`. Audited
+  (`agent_call` + `agent_roster` with counts); no secret logged or echoed. New reusable **`test/fake-gateway.js`**
+  — a zero-dependency gateway stub (hand-rolled RFC6455 + `connect`/`agents.list` RPCs) so WS-dependent routes
+  can finally be driven end-to-end; reused by 3b and the Phase-4 DM tests. Evidence: `test-agent-roster.js`
+  **7/7** (Bearer required + human cookie inert · two-gateway merge + ref/key shape · down gateway marked
+  offline non-fatally · `you` identity · no secret in response/audit · audit counts · human `/api/agents`
+  parity) · `node --check` · node:test **24/24** · test-agent-* + test-board-* unchanged · lint + secret-scan
+  clean · `run-tests.sh` all green. Next: 3b (roster gate — multi-gateway merge, offline marking, token scope).
