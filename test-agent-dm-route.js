@@ -22,7 +22,8 @@
  *      (not a silent success)
  *   G. privacy — the DM body appears ONLY in the recipient's chat.send; it never
  *      reaches portal-audit.log, and the audit carries no token/secret
- *   H. awaitReply (sync reply) is refused 501 and stores nothing (that is 4c)
+ *   H. awaitReply (sync reply) is live (4c): a no-reply hold returns timedOut,
+ *      never 501
  *   I. empty body is refused 400 with no write
  *   J. the mailbox persists to portal-agent-dm.json 0600
  *
@@ -153,7 +154,9 @@ async function waitFor(fn, ms = 10000, step = 200) {
   ];
 
   const d = tmp();
-  setup(d, { gateways });
+  // A short sync budget keeps the (now-live) awaitReply path fast here; the
+  // dedicated sync suite is test-agent-dm-sync.js (plan item 4c).
+  setup(d, { gateways, agentDmAwaitReplyMs: 5000 });
   const s = await startServer(d);
   const base = `http://127.0.0.1:${s.port}`;
   try {
@@ -296,13 +299,16 @@ async function waitFor(fn, ms = 10000, step = 200) {
       pass++;
     }
 
-    // ── H. awaitReply refused (that is 4c) ────────────────────────────────
+    // ── H. awaitReply is live (4c): a no-reply hold times out, not 501 ────
     {
       const before = readStore(d).dms.length;
       const r = await sendDm(base, alice, { to: 'lab:bob', text: 'sync please', awaitReply: true });
-      assert.equal(r.status, 501, `H: awaitReply should be 501 until 4c, got ${r.status}`);
-      assert.equal(readStore(d).dms.length, before, 'H: a refused awaitReply must store nothing');
-      console.log('✓ H: awaitReply (sync reply) is refused 501 and stores nothing (lands in 4c)');
+      const j = await r.json();
+      assert.equal(r.status, 200, `H: a sync DM should 200 now that 4c landed, got ${r.status}`);
+      assert.equal(j.timedOut, true, 'H: no reply event was emitted, so the hold should time out');
+      assert.equal(j.dm.state, 'delivered', `H: a no-reply sync DM stays delivered, got ${j.dm.state}`);
+      assert.equal(readStore(d).dms.length, before + 1, 'H: the sync DM should be stored (delivered)');
+      console.log('✓ H: awaitReply (sync reply, plan 4c) is live — a no-reply hold returns timedOut');
       pass++;
     }
 

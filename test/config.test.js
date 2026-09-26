@@ -27,6 +27,7 @@ const KNOWN_CONFIG_KEYS = new Set([
   'agentRateLimitPerMinute', 'agentRateLimitBurst', 'agentMaxBodyBytes',
   'boardRetentionDays', 'boardMaxPosts', 'boardMaxBytes', 'boardMentionWake',
   'agentDmRetentionDays', 'agentDmMaxMessages', 'agentDmMaxBytes',
+  'agentDmAwaitReplyMs', 'agentDmSyncMaxConcurrent',
   'gateways', '_comment',
 ]);
 

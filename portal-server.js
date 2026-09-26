@@ -112,6 +112,13 @@ const DEFAULTS = {
   agentDmRetentionDays: 0,        // DMs older than this are pruned (0 = keep forever)
   agentDmMaxMessages: 5000,       // hard count cap; oldest DMs dropped past it
   agentDmMaxBytes: 4 * 1024 * 1024, // hard size cap; oldest DMs trimmed past it
+  // Cross-server agent DM sync reply (plan item 4c) — `awaitReply:true` holds
+  // the HTTP response until the recipient's next assistant message lands (the
+  // runId watcher, same as a room round), bounded by agentDmAwaitReplyMs; and
+  // caps how many such holds may be open at once so a fleet of blocking
+  // callers can't exhaust the portal's sockets/handlers.
+  agentDmAwaitReplyMs: 120000,    // max time to hold a sync DM for its reply
+  agentDmSyncMaxConcurrent: 20,   // max concurrent sync (awaitReply) holds
   // Board notify (plan item 2e) — @agent mention-wake is OPT-IN and off by
   // default. The v1 notify path is PULL (a per-identity unread cursor an agent
   // reads on its heartbeat); the wake push stays dark until the operator turns
@@ -278,6 +285,8 @@ function loadConfig() {
     PORTAL_AGENT_DM_RETENTION_DAYS: 'agentDmRetentionDays',
     PORTAL_AGENT_DM_MAX_MESSAGES: 'agentDmMaxMessages',
     PORTAL_AGENT_DM_MAX_BYTES: 'agentDmMaxBytes',
+    PORTAL_AGENT_DM_AWAIT_REPLY_MS: 'agentDmAwaitReplyMs',
+    PORTAL_AGENT_DM_SYNC_MAX_CONCURRENT: 'agentDmSyncMaxConcurrent',
   };
   for (const [envKey, cfgKey] of Object.entries(envMap)) {
     if (process.env[envKey] !== undefined) {
@@ -790,18 +799,24 @@ async function handleAgentApi(req, res, url) {
       METRICS.agentDmUnrouted++;
       audit('agent_dm_unrouted', rec.agentId, 'agent', { token: rec.id, from: ident.ref, to: dmTargetRef(body.to) });
     } else if (r.error) {
-      audit('agent_dm_rejected', rec.agentId, 'agent', { token: rec.id, from: ident.ref, status: r.status });
+      if (r.status === 429 && r.retryAfter) res.setHeader('Retry-After', String(r.retryAfter));
+      audit('agent_dm_rejected', rec.agentId, 'agent', { token: rec.id, from: ident.ref, status: r.status, sync: !!r.sync });
     } else {
       const st = r.dm.state;
       if (st === 'delivered') METRICS.agentDms++;
       else if (st === 'failed') METRICS.agentDmFailed++;
+      else if (st === 'replied') METRICS.agentDmReplies++;
       audit('agent_dm', rec.agentId, 'agent', {
         token: rec.id, dm: r.dm.id, from: r.dm.from, to: r.dm.to,
         toGateway: r.dm.toGateway, toAgent: r.dm.toAgent, state: st, hops: r.dm.hops,
+        sync: !!r.sync, replied: st === 'replied', timedOut: r.sync ? !!r.timedOut : undefined,
       });
     }
-    audit('agent_call', rec.agentId, 'agent', { ...callDetail, status: r.error ? (r.status || 400) : 202 });
+    const dmStatus = r.error ? (r.status || 400) : (r.sync ? 200 : 202);
+    audit('agent_call', rec.agentId, 'agent', { ...callDetail, status: dmStatus });
     if (r.error) return json(res, r.status || 400, { error: r.error });
+    // Sync (4c): 200 with the held reply inline; async: 202 accepted.
+    if (r.sync) return json(res, 200, { ok: true, dm: r.dm, timedOut: !!r.timedOut });
     return json(res, 202, { ok: true, dm: r.dm });
   }
 
@@ -2792,6 +2807,29 @@ function dmRetentionDays() { return Math.max(0, Number(CONFIG.agentDmRetentionDa
 function dmMaxMessages() { return Math.max(DM_KEEP_MIN, Number(CONFIG.agentDmMaxMessages) || 5000); }
 function dmMaxBytes() { return Math.max(64 * 1024, Number(CONFIG.agentDmMaxBytes) || 4 * 1024 * 1024); }
 
+// Sync-reply wait window (plan item 4c). A `awaitReply:true` DM holds its HTTP
+// response until the recipient's run emits its assistant message (matched by
+// runId across ALL sessions, exactly like a room round) or this budget elapses
+// — then the DM is returned in its delivered (no-reply) state rather than
+// failing the call. Clamped so a misconfig can neither hang the portal nor cut
+// a slow agent off instantly.
+const DM_AWAIT_MIN = 5000;
+const DM_AWAIT_MAX = 300000;
+function dmAwaitMs() {
+  const v = Number(CONFIG.agentDmAwaitReplyMs);
+  if (!Number.isFinite(v) || v <= 0) return 120000;
+  return Math.max(DM_AWAIT_MIN, Math.min(DM_AWAIT_MAX, Math.floor(v)));
+}
+// Coarse ceiling on concurrent sync holds so a fleet of blocking callers can't
+// exhaust the portal's handlers/sockets. The fine-grained per-pair rate + burst
+// budget + circuit breaker is item 4d.
+function dmSyncMaxConcurrent() {
+  const v = Number(CONFIG.agentDmSyncMaxConcurrent);
+  if (!Number.isFinite(v) || v <= 0) return 20;
+  return Math.min(200, Math.floor(v));
+}
+let dmSyncInFlight = 0;
+
 // Terminal states are finished; only these may be dropped by prune.
 function dmIsTerminal(dm) { return !!dm && (dm.state === 'replied' || dm.state === 'failed'); }
 
@@ -2890,13 +2928,17 @@ setInterval(() => { try { if (pruneDmStore() > 0) saveDmStore(); } catch { /* ne
 // The mailbox (4a) is the durable record; this is the only writer of it, so
 // every DM write goes through one function.
 //
-// Async in 4b: store → deliver → 202 {dm}. The SYNC hold (`awaitReply`, which
-// returns the recipient's next assistant message) lands in 4c — a request that
-// asks for it now is refused rather than silently downgraded. Loop safety
-// (hops / per-pair rate / burst budget / circuit breaker) is 4d; this item
-// routes and records, it does not yet bound the loop. DM content is PRIVATE
-// (4e): it is delivered to the recipient's session and echoed to its sender —
-// never to the audit log.
+// Two delivery modes. ASYNC (default): store → deliver → 202 {dm}. SYNC
+// (`awaitReply:true`, item 4c): after delivery, hold the HTTP response and
+// return the recipient's next assistant message (200 {dm} with `dm.reply`), or
+// `timedOut:true` when the budget elapses. The hold reuses the room engine's
+// state:final + runId watcher (across ALL sessions, so a channel-bound agent's
+// reply still matches) with its history-fallback for a busy/queued session, so
+// the whole thing stays inside ONE time budget. Loop safety (hops / per-pair
+// rate / burst budget / circuit breaker) is 4d; this item routes, records and
+// holds, it does not yet bound the loop. DM content is PRIVATE (4e): it is
+// delivered to the recipient's session and echoed to its sender — never to the
+// audit log.
 function newDmId() { return 'd' + Date.now().toString(36) + crypto.randomBytes(3).toString('hex'); }
 
 // Caller identity for an agent token, in the SAME `agent:<gw>:<id>` ref shape
@@ -2922,8 +2964,9 @@ function dmTargetRef(to) {
 // The body is never logged: only the ids/refs/state reach the audit trail.
 async function dmRoute({ to, text, awaitReply } = {}, fromIdent) {
   if (String(text == null ? '' : text).trim() === '') return { error: 'empty message', status: 400 };
-  if (awaitReply === true) {
-    return { error: 'awaitReply (sync reply) is not implemented yet — it lands in plan item 4c', status: 501 };
+  const sync = awaitReply === true;
+  if (sync && dmSyncInFlight >= dmSyncMaxConcurrent()) {
+    return { error: 'too many concurrent sync DMs — retry later', status: 429, retryAfter: 5, sync: true };
   }
   const targetRef = dmTargetRef(to);
   if (!targetRef) return { error: 'target (to) required', status: 400 };
@@ -2939,7 +2982,7 @@ async function dmRoute({ to, text, awaitReply } = {}, fromIdent) {
     ts: Date.now(),
     state: 'queued',
     hops: 0,               // a fresh send starts the hop chain; replies carry +1 (4c/4d)
-    awaitReply: false,
+    awaitReply: sync,
   });
   if (!dm) return { error: 'invalid message', status: 400 };
   DM.dms.push(dm);
@@ -2949,8 +2992,9 @@ async function dmRoute({ to, text, awaitReply } = {}, fromIdent) {
   // ONLY place the body is emitted (to its intended recipient).
   const wake = `[portal DM from ${fromIdent.ref}] ${dm.text}\n\n`
     + `Reply with POST /api/agent/dm {"to":"${fromIdent.ref}","text":"…"} (your copy is dm ${dm.id}).`;
+  let sent = null;
   try {
-    await t.client.request('chat.send', {
+    sent = await t.client.request('chat.send', {
       sessionKey: `agent:${t.agentId}:main`,
       message: wake.slice(0, 16000),
       deliver: false,
@@ -2963,7 +3007,36 @@ async function dmRoute({ to, text, awaitReply } = {}, fromIdent) {
     dm.error = String((e && e.message) || e).slice(0, 300);
   }
   saveDmStore();
-  return { dm };
+  // Sync hold (4c): only worth waiting if the prompt actually reached the
+  // recipient (a failed send has nothing to answer). The watcher matches the
+  // ack'd runId across ALL sessions — a busy session acks a runId that isn't
+  // the one that answers, so we fall back to history exactly like a room
+  // round, all within the single dmAwaitMs() budget.
+  if (sync && dm.state === 'delivered') {
+    dmSyncInFlight++;
+    try {
+      const sentAt = Date.now();
+      const deadline = sentAt + dmAwaitMs();
+      let replyText = '';
+      if (sent && sent.runId) {
+        const r = await awaitAgentReply({ id: 'dm:' + dm.id }, t.agentId, sent.runId, Math.max(1000, deadline - Date.now()), t.client);
+        replyText = String((r && r.text) || '').trim();
+      }
+      if (!replyText && deadline - Date.now() > 3000) {
+        replyText = String(await historyFallbackReply(t.client, t.agentId, sentAt, deadline - Date.now()) || '').trim();
+      }
+      if (replyText) {
+        dm.reply = replyText.slice(0, DM_TEXT_MAX);
+        dm.replyTs = Date.now();
+        dm.state = 'replied';
+        saveDmStore();
+      }
+      return { dm, sync: true, timedOut: !replyText };
+    } finally {
+      dmSyncInFlight--;
+    }
+  }
+  return { dm, sync };
 }
 
 // Is this DM one the caller is a party to? Privacy-safe by construction: only a
@@ -3580,6 +3653,7 @@ const METRICS = {
   agentDms: 0,
   agentDmFailed: 0,
   agentDmUnrouted: 0,
+  agentDmReplies: 0,
 };
 
 // One structured log line. `logFormat:"json"` (the default) emits a JSON object
@@ -3695,6 +3769,7 @@ function metrics(res, req) {
   metric('cirrus_portal_agent_dms_total', 'counter', 'Cross-server agent DMs delivered to a recipient session since start.', [`cirrus_portal_agent_dms_total ${METRICS.agentDms}`]);
   metric('cirrus_portal_agent_dm_failed_total', 'counter', 'Cross-server agent DMs that failed at delivery since start.', [`cirrus_portal_agent_dm_failed_total ${METRICS.agentDmFailed}`]);
   metric('cirrus_portal_agent_dm_unrouted_total', 'counter', 'Agent DMs refused because the target agent was unreachable.', [`cirrus_portal_agent_dm_unrouted_total ${METRICS.agentDmUnrouted}`]);
+  metric('cirrus_portal_agent_dm_replies_total', 'counter', 'Sync (awaitReply) agent DMs that returned the recipient\'s reply since start.', [`cirrus_portal_agent_dm_replies_total ${METRICS.agentDmReplies}`]);
   metric('cirrus_portal_audit_entries', 'gauge', 'Lines currently in the audit log.', [`cirrus_portal_audit_entries ${auditLineCount()}`]);
   res.writeHead(200, { 'Content-Type': 'text/plain; version=0.0.4; charset=utf-8' });
   res.end(L.join('\n') + '\n');

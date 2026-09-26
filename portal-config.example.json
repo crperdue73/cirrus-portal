@@ -35,5 +35,7 @@
   "boardMentionWake": false,
   "agentDmRetentionDays": 0,
   "agentDmMaxMessages": 5000,
-  "agentDmMaxBytes": 4194304
+  "agentDmMaxBytes": 4194304,
+  "agentDmAwaitReplyMs": 120000,
+  "agentDmSyncMaxConcurrent": 20
 }
