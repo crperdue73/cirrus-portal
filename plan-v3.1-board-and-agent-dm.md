@@ -50,7 +50,7 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
 
 ## Phase 4 — Cross-server agent DM
 - [x] **4a. Mailbox store** — `portal-agent-dm.json` (0600): id, from, to, text, ts, state, reply, hops, awaitReply. ✅ 2026-09-26 (`eb93baf`)
-- [ ] **4b. Routing** — resolve target gateway → `chat.send` into `agent:<id>:main`. Same code path for local and remote.
+- [x] **4b. Routing** — resolve target gateway → `chat.send` into `agent:<id>:main`. Same code path for local and remote. ✅ 2026-09-26 (`8ea894d`)
 - [ ] **4c. Sync reply** — `awaitReply:true` returns the recipient's next assistant message (reuse `state:final` + `runId` watcher).
 - [ ] **4d. Loop safety** — hop counter (max 3), per-pair rate limit, burst budget, no-relay flag, circuit breaker.
 - [ ] **4e. Privacy** — content hidden from admin by default, server-side; `agentDmVisibility` switch; **agents are told** the current visibility and the flip is audited.
@@ -289,3 +289,21 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
   **6/6** (first-boot 0600 empty · normalize/clamp · age-prune spares in-flight · cap drops terminal
   first · maxBytes trims to floor · env override) · `node --check` · test/config 4/4 · lint + secret-scan
   clean · `run-tests.sh` all green. Next: 4b (routing → cross-server `chat.send`).
+- **2026-09-26 11:16** — ✅ **4b done** (`8ea894d`). Cross-server DM **router** — the one code path that
+  serves local AND remote. `dmRoute()` resolves the target ref via `resolveAgentRef` to its owning gateway
+  client and `chat.send`s into `agent:<id>:main`, exactly like the human `/api/send` and the board @mention
+  wake, so "cross-server" is just "which client owns this ref" (no second transport). It persists the DM
+  BEFORE delivery (`queued` → `delivered` | `failed`) so a crash mid-send still leaves a trace, and emits the
+  body to the recipient's session ONLY. Surfaces (Bearer-authed, `/api/agent/*` only): **`POST /api/agent/dm
+  {to,text}`** → `202 {dm}` (async; `awaitReply` is **refused 501** rather than silently downgraded — the sync
+  hold is 4c) and **`GET /api/agent/dm?since=&limit=`** → the caller's own sent+received DMs with a `since`
+  cursor + `limit` clamp (caller-scoped by construction: a DM is visible only to a ref that is its `from`/`to`;
+  admin/global visibility is 4e). Loop safety is 4d. Added the `cirrus_portal_agent_dm{s,_failed,_unrouted}_total`
+  metrics and audits `agent_dm`/`agent_dm_unrouted`/`agent_dm_rejected`/`agent_dm_read` — **ids + state only,
+  never a body or a token** (privacy by construction). Evidence: `test-agent-dm-route.js` **10/10** (Bearer
+  required + cookie inert · cross-server delivery into `agent:bob:main` on `lab` · same-server into
+  `agent:cara:main` on `home` · unreachable target 404 + no write + `agent_dm_unrouted` · caller-scoped mailbox
+  + since cursor + limit · delivery failure → `state:failed` · no body/token in the audit log · awaitReply 501 ·
+  empty body 400 · 0600 persist) · `node --check` · node:test **24/24** · `run-tests.sh` all green · lint +
+  secret-scan clean. No config keys added (no drift). Preview `portal-preview` untouched — 4b has no user-visible
+  UI surface (the Agent DM tab is 4f), so no restart was needed this run. Next: 4c (sync `awaitReply`).
