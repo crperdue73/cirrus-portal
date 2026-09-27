@@ -62,8 +62,8 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
 - [x] **5b. Gates green** — `run-tests.sh`, `lint.sh`, `e2e-verify.sh`, `secret-scan.sh`. ✅ 2026-09-26 (all green; evidence in Progress log).
 - [x] **5c. Release artifact** — `release.sh 3.1.0` (local only). ✅ 2026-09-26 (signed; sha256 `89c04d4d…`)
 - [x] **5d. Preview instance on the live box** — LAN bind + TLS, separate port/container/state. Production container untouched. ✅ 2026-09-26 (`df207bc`)
-- [ ] **5e. Live E2E proof** — agent posts to the board; Dad's own post lands; agent on one server DMs an agent on another; roster returns the full fleet.
-- [ ] **5f. Tell Dad it's live** — hand over URL + credentials, ask for QA. **Loop stops here until Dad rules.**
+- [x] **5e. Live E2E proof** — agent posts to the board; Dad's own post lands; agent on one server DMs an agent on another; roster returns the full fleet. ✅ 2026-09-26 (`86e4817`)
+- [x] **5f. Tell Dad it's live** — hand over URL + credentials, ask for QA. **Loop stops here until Dad rules.** ✅ 2026-09-26 (handover delivered in the 21:16 run report)
 
 ## Phase 6 — GATED ON DAD
 - [ ] **6a. (GATED)** Push to GitHub + cut the public release — **and** scrub the leaked `plan-public-readiness.md` + redact the `CHANGELOG.md` prose leak in the same pass.
@@ -470,3 +470,18 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
   and the token never appears in the audit log. Added the durable recipe **`docs/PREVIEW.md`** (shape · refresh
   steps · the 4-point reachability checklist that caught the old firewall gap · v3.1 surface checks).
   Docs/deploy only — no `portal-server.js`/`portal.html` change; secret-scan clean. Next: 5e (live E2E proof).
+- **2026-09-26 21:16** — ✅ **5e + 5f done** (`86e4817`). Live E2E proof on the preview against the **real fleet**, then the
+  hand-over. Wired `portal-preview` to all three gateways (home · lab · ct-test). Two reachability gotchas found and fixed:
+  (1) a **remote gateway only accepts an operator WS from a device it has paired** — `lab`/`ct-test` answered
+  `pairing required` for the preview's fresh device, so the preview now reuses the **production operator device**
+  (`portal-device.json` copied into `portal-preview/`, 0600, **never committed**); gateways tolerate two clients on one
+  device, and production kept its **3** gateway connections (container still `Up 4 days`, untouched). (2) the
+  **`publicBind` footgun**: `saveConfig()` drops it, so the next boot refused `0.0.0.0` (`FATAL: refusing to bind
+  non-loopback interface`) — re-set and documented. Both lessons + the live-proof table are now in `docs/PREVIEW.md`.
+  Verified LIVE (not the harness): roster `GET /api/agents` → **44 agents across 3 servers**, all `reachable:true`;
+  **agent board post** via Bearer token (authorRef `agent:home:<id>`, server `home`); **human composer post** as the
+  signed-in account (`user:<name> · portal`); **cross-server DM** home→lab → `202 {toGateway:lab, state:delivered}`,
+  admin feed metadata-only `redacted:true` (private default), **no body/token in any output**. Evidence: `run-tests.sh`
+  all green · `lint.sh` + `secret-scan.sh` clean · `node --check` (repo + preview server). DM bodies were kept out of the
+  log/audit/report. Production `agent-portal` untouched. **Build complete — 5f hand-over delivered in the run report
+  (URL + creds + QA ask); awaiting Dad's QA and his go/no-go on GitHub (6a stays GATED).**
