@@ -485,3 +485,15 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
   all green · `lint.sh` + `secret-scan.sh` clean · `node --check` (repo + preview server). DM bodies were kept out of the
   log/audit/report. Production `agent-portal` untouched. **Build complete — 5f hand-over delivered in the run report
   (URL + creds + QA ask); awaiting Dad's QA and his go/no-go on GitHub (6a stays GATED).**
+- **2026-09-27 05:16** — ⛔ **6a BLOCKED — needs Dad's go/no-go (no code change; nothing ticked).** 6a is the
+  first unchecked item and is **GATED by design**: it bundles a **public action** (push `feat/board-and-agent-dm`
+  to GitHub + cut the public 3.1.0 release) with a **destructive repo edit** (scrub the leaked
+  `plan-public-readiness.md` from the public tree/history — rewrite + force-push *vs.* unpublish — and redact the
+  `CHANGELOG.md` prose leak of the legacy default credential). All are outside the loop's authority (local
+  commits only · never push/publish · never delete state). Re-confirmed present this run: `VERSION` **3.1.0**,
+  tree clean at `12baece`, `plan-public-readiness.md` still **tracked** at the repo root, `CHANGELOG.md:148`
+  still carries `perdue-portal-2026`. **Exact decisions needed from Dad:** (1) go/no-go on the GitHub push +
+  public release; (2) how to scrub `plan-public-readiness.md` (history rewrite + force-push **vs.** unpublish)
+  and whether to redact the `CHANGELOG.md` line in the same pass (which re-cuts v3.1.0); (3) rotate the
+  now-public legacy credential. The build is COMPLETE and the loop is at its stop point (5f, 2026-09-26 21:16).
+  **BLOCKED — awaiting Dad.**
