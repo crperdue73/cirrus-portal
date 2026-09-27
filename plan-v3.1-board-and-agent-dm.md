@@ -61,7 +61,7 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
 - [x] **5a. Version + docs** — VERSION 3.1.0, CHANGELOG, README/ADMIN updates. ✅ 2026-09-26 (`fb77c59`)
 - [x] **5b. Gates green** — `run-tests.sh`, `lint.sh`, `e2e-verify.sh`, `secret-scan.sh`. ✅ 2026-09-26 (all green; evidence in Progress log).
 - [x] **5c. Release artifact** — `release.sh 3.1.0` (local only). ✅ 2026-09-26 (signed; sha256 `89c04d4d…`)
-- [ ] **5d. Preview instance on the live box** — LAN bind + TLS, separate port/container/state. Production container untouched.
+- [x] **5d. Preview instance on the live box** — LAN bind + TLS, separate port/container/state. Production container untouched. ✅ 2026-09-26 (`df207bc`)
 - [ ] **5e. Live E2E proof** — agent posts to the board; Dad's own post lands; agent on one server DMs an agent on another; roster returns the full fleet.
 - [ ] **5f. Tell Dad it's live** — hand over URL + credentials, ask for QA. **Loop stops here until Dad rules.**
 
@@ -454,3 +454,19 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
   + preview `portal-preview` untouched. Next: 5d (formal preview instance on the live box), then 5e/5f.
 
   > Tag note: `v3.1.0` is local-only and will be re-cut (`git tag -d` + re-tag) if the live E2E (5e) forces a code fix.
+- **2026-09-26 20:16** — ✅ **5d done** (`df207bc`). The **formal preview instance** — refreshed `portal-preview`
+  (host-net, bind `0.0.0.0:18810`, TLS `manual`) from the **stale 2d-era snapshot** (`portal-server.js` 196 KB,
+  VERSION 3.0.0) to the **v3.1.0** tree (`portal-server.js` 254 KB, VERSION 3.1.0): its bind-mounted `/app` copy was
+  replaced file-by-file (server/html/setup/nexus/branding/healthcheck/VERSION; old copy kept in
+  `portal-preview-backup-<ts>/`), ownership preserved `10001:10001`, `node --check` gate passed, container
+  restarted. Regenerated the self-signed cert to cover **both** reachable LAN IPs (SANs `192.168.1.110`,
+  `192.168.1.188`, `localhost`; 90-day). **State stays separate** (`portal-preview/`, 0600 — config, users,
+  board, plus the newly-created empty `portal-agent-dm.json` + `portal-secrets.json`). **Production
+  `agent-portal` untouched** (still `Up 4 days`, `0.0.0.0:18800`). Verified live: `/metrics` →
+  `cirrus_portal_build_info{version="3.1.0"}` · root **200** on `127.0.0.1`/`.110`/`.188` · login **200** ·
+  board read **2 posts** · every `/api/agent/*` demands auth (anon **401** *and* human-cookie **401** — scope
+  isolation) · admin-only `/api/agent-dms/stream` opens with a `hello` frame carrying `visibility:"private"`
+  (privacy default live) · minted a smoke token → `/api/agent/whoami` + `/api/agent/board` **200** → **revoked**,
+  and the token never appears in the audit log. Added the durable recipe **`docs/PREVIEW.md`** (shape · refresh
+  steps · the 4-point reachability checklist that caught the old firewall gap · v3.1 surface checks).
+  Docs/deploy only — no `portal-server.js`/`portal.html` change; secret-scan clean. Next: 5e (live E2E proof).
