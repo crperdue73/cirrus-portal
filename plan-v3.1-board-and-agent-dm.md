@@ -507,3 +507,15 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
   present (`install.sh`, `docker-compose.yml`, `Dockerfile`, `portal-server.js`, `portal.html`, `setup.html`, examples, docs).
   Scrub/redact/rotate remain **GATED** (6b/6c) — the `perdue-portal-2026` literal is still in the public repo + release tarball;
   recommended rotation now. No GitHub Release object cut. Root `screenshots/` and `dist/` left untracked (not needed to install).
+
+- **2026-10-05 12:43** — ⛔ **6b BLOCKED — needs Dad's decision (no code change; nothing ticked).** 6b is the first
+  unchecked item and is **GATED by design**: it bundles a **public/destructive action** with a **production credential
+  change**, all outside the loop's authority (local commits only · never push/publish · never delete state · never touch
+  prod). Re-confirmed this run: `plan-public-readiness.md` is still **tracked AND present on `origin/main`**
+  (`git ls-tree origin/main`), `CHANGELOG.md:148` still names `perdue-portal-2026`, and the public `v3.1.0` tag points at
+  `141aaf1`. **Exact decisions needed from Dad:** (1) scrub the public `plan-public-readiness.md` by **history rewrite +
+  force-push** *vs.* **delete in a new commit** (unpublish); (2) redact/rewrite `CHANGELOG.md:148`, and if so whether to
+  **re-cut `v3.1.0`** (the tag is already pushed, so re-cutting means a force-moved tag); (3) **rotate** the now-public
+  legacy credential `perdue-portal-2026`. 6c (GitHub Release/announcement) is the only other open item and is likewise
+  gated. **Build is complete; the loop is at its stop point.** Subsequent hourly runs on this same blocked item reply
+  NO_REPLY and make no further commits until Dad rules.
