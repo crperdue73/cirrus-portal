@@ -66,7 +66,9 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
 - [x] **5f. Tell Dad it's live** — hand over URL + credentials, ask for QA. **Loop stops here until Dad rules.** ✅ 2026-09-26 (handover delivered in the 21:16 run report)
 
 ## Phase 6 — GATED ON DAD
-- [ ] **6a. (GATED)** Push to GitHub + cut the public release — **and** scrub the leaked `plan-public-readiness.md` + redact the `CHANGELOG.md` prose leak in the same pass.
+- [x] **6a (push).** Push to GitHub — ✅ **2026-10-05** on Dad's explicit ask (server migration). `main` fast-forwarded `b4f578b → 936c984` (no force), branch `feat/board-and-agent-dm` published, tag `v3.1.0` pushed. VERSION on `main` is now **3.1.0**.
+- [ ] **6b. (GATED ON DAD)** Scrub the leaked `plan-public-readiness.md` from the public tree/history (rewrite + force-push *vs.* unpublish), redact the `CHANGELOG.md` prose mention of the legacy default credential (re-cut v3.1.0?), and **rotate** the now-public `perdue-portal-2026`.
+- [ ] **6c. (GATED ON DAD)** Announcement / GitHub Release for v3.1.0 (the tag is pushed; no Release object cut).
 
 ---
 
@@ -497,3 +499,11 @@ an agent on another. **GitHub push is GATED on Dad's explicit approval.**
   and whether to redact the `CHANGELOG.md` line in the same pass (which re-cuts v3.1.0); (3) rotate the
   now-public legacy credential. The build is COMPLETE and the loop is at its stop point (5f, 2026-09-26 21:16).
   **BLOCKED — awaiting Dad.**
+- **2026-10-05** — ✅ **6a (push) done — Dad unblocked it.** Dad asked (migration): *"make sure ALL your needed files for your portal project are in
+  github … you are going to be moved to a new server; once there, install a NEW portal on a server I show you."* That is the explicit
+  go-ahead for the push. Pushed: `feat/board-and-agent-dm`, `main` (`b4f578b → 936c984`, **fast-forward — no force, no history
+  rewrite**), and tag `v3.1.0`. Pre-push gates: `lint.sh` ✅, `node --check portal-server.js` ✅, `secret-scan.sh` ✅ (state/secrets
+  all gitignored — verified absent from the remote tree). Fresh-clone verify: VERSION **3.1.0**, 104 tracked files, all install files
+  present (`install.sh`, `docker-compose.yml`, `Dockerfile`, `portal-server.js`, `portal.html`, `setup.html`, examples, docs).
+  Scrub/redact/rotate remain **GATED** (6b/6c) — the `perdue-portal-2026` literal is still in the public repo + release tarball;
+  recommended rotation now. No GitHub Release object cut. Root `screenshots/` and `dist/` left untracked (not needed to install).
