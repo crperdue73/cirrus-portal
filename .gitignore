@@ -29,3 +29,7 @@ portal-first-run.txt
 portal-backup-passphrase
 backups/
 dist/
+
+# ── Maintainer notes / internal planning (never part of the product) ───────
+/plan-*.md
+/screenshots/

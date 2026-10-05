@@ -5,7 +5,7 @@ step is either verifiable or explicitly marked as needing approval.
 
 > **Publishing is gated.** Steps 1–8 are local and safe to run any time.
 > Step 9 (publish/announce) is a **public action** and needs Dad's explicit
-> go-ahead — see `plan-public-readiness.md` item 20.
+> go-ahead.
 
 ---
 
@@ -103,7 +103,7 @@ Also confirm the tarball contains **no** runtime state — `portal-config.json`,
 
 ## 6. Smoke-install the tarball
 
-On a throwaway box or container (see `plan-public-readiness.md` item 18):
+On a throwaway box or container:
 
 ```bash
 tar xzf cirrus-portal-3.0.0.tar.gz && cd cirrus-portal-3.0.0

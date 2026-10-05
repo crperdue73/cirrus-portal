@@ -1,8 +1,7 @@
 # Network Decision — Remote-Agent Reachability (Option A)
 
 **Status:** Accepted · **Decided:** 2026-09-25 by the project owner · **Recorded by:** Noah
-**Plan item:** 0c in [`plan-v3.1-board-and-agent-dm.md`](../plan-v3.1-board-and-agent-dm.md)
-**Design:** `../cirrus/board-and-agent-dm-design.md` §2 (reachability) + §5 risk 1 + §7 decision 1
+**Plan item:** 0c (remote-agent reachability milestone)
 
 ---
 
