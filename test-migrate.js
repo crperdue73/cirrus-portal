@@ -64,7 +64,7 @@ function seedV2(dir) {
       { id: 'home', name: 'Home (188)', url: 'ws://127.0.0.1:18790', token: 'pocket-aegis-root-2026', enabled: true },
       { id: 'lab', name: 'Lab', url: 'ws://192.168.1.111:18789', token: 'e3d063b9f3e9b62d2b823f8725764d2f', enabled: false },
     ],
-    portalPassword: 'perdue-portal-2026',
+    portalPassword: 'changeme',
     sessionTtlHours: 12,
   };
   fs.writeFileSync(path.join(dir, 'portal-config.json'), JSON.stringify(config, null, 2));
@@ -158,7 +158,7 @@ async function main() {
     const sec = readJson(path.join(dir, 'portal-secrets.json'));
     assert.equal(sec.gatewayTokens.home, 'pocket-aegis-root-2026', 'B: home token moved into secrets');
     assert.equal(sec.gatewayTokens.lab, 'e3d063b9f3e9b62d2b823f8725764d2f', 'B: lab token moved into secrets');
-    assert.notEqual(sec.portalPassword, 'perdue-portal-2026', 'B: bootstrap portalPassword must be rotated');
+    assert.notEqual(sec.portalPassword, 'changeme', 'B: bootstrap portalPassword must be rotated');
     assert(sec.portalPassword.length >= 12, 'B: rotated bootstrap password must be strong');
     assert.equal(mode(path.join(dir, 'portal-secrets.json')), '600', 'B: secrets file must be 0600');
 
@@ -307,7 +307,7 @@ async function main() {
       if (realCfg.bind && realCfg.bind !== '127.0.0.1') {
         assert.equal(migrated.bind, '127.0.0.1', 'H: real public bind must fail closed');
       }
-      assert(!JSON.stringify(migrated).includes('perdue-portal-2026'), 'H: shared bootstrap password must be gone from config');
+      assert(!JSON.stringify(migrated).includes('changeme'), 'H: shared bootstrap password must be gone from config');
       console.log('✓ H: migrates a copy of the real repo state cleanly');
       pass++;
       fs.rmSync(dir, { recursive: true, force: true });

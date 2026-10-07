@@ -10,7 +10,7 @@
  *     (publicBind / tlsMode / trustProxy / login limits / idle TTL) are added
  *     with sane defaults; the config is stamped `schemaVersion: 3`.
  *   • credential rotation — any account still using a KNOWN-DEFAULT password
- *     (admin/admin, perdue-portal-2026, *-demo, …) is rotated to a fresh,
+ *     (admin/admin, *-demo, …) is rotated to a fresh,
  *     strong, unique password written to portal-credentials.txt (0600).
  *   • role model — legacy/alias roles (teacher, owner, ta, …) are mapped to
  *     the 3.x roles (student | instructor | admin) and every user record is
@@ -73,7 +73,7 @@ const BACKUP_ROOT = path.join(DIR, 'backups');
 //    test-migrate.js asserts the default-password list never drifts) ─────────
 const KNOWN_DEFAULT_PASSWORDS = [
   'admin', 'password', 'changeme', 'change-me', 'letmein', 'portal',
-  'cirrus', 'perdue-portal-2026', 'instructor-demo', 'student-demo',
+  'cirrus', 'instructor-demo', 'student-demo',
 ];
 
 // Legacy role aliases → canonical 3.x roles.

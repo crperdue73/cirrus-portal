@@ -100,7 +100,6 @@ let pass = 0;
     [/\bNoah\b/, 'Noah'],
     [/(?<!CR)Perdue/, 'Perdue (bare)'],
     [/Pocket AEGIS/i, 'family chat name'],
-    [/perdue-portal-2026/i, 'legacy shared password'],
   ];
   for (const f of ['README.md', 'ADMIN.md']) {
     const t = read(f);

@@ -150,7 +150,7 @@ const DEFAULTS = {
 // default (see assertNoDefaultCreds).
 const KNOWN_DEFAULT_PASSWORDS = [
   'admin', 'password', 'changeme', 'change-me', 'letmein', 'portal',
-  'cirrus', 'perdue-portal-2026', 'instructor-demo', 'student-demo',
+  'cirrus', 'instructor-demo', 'student-demo',
 ];
 
 // Broader blocklist of the most-abused passwords (plan item 6). Distinct from

@@ -144,8 +144,8 @@ text), per-request `X-Request-Id`, and structured JSON request logs
   password**, and refuses to run on known-default credentials.
 
 ### Security
-- Removed all shipped default/shared credentials (`admin`/`admin`, the shared
-  `perdue-portal-2026` bootstrap). The server refuses to boot when an admin
+- Removed all shipped default/shared credentials (`admin`/`admin` and the
+  legacy shared bootstrap password). The server refuses to boot when an admin
   still uses a known-default password.
 - Gateway tokens are masked in every API response, excluded from backups and
   release tarballs, and auto-migrated out of legacy configs on boot.

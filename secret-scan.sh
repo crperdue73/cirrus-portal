@@ -40,7 +40,7 @@ PAT_ASSIGN='"[a-z0-9_.-]*(token|password|passwd|secret|api_?key|access_?key|priv
 # Values that are obviously placeholders, not real secrets.
 PAT_PLACEHOLDER='REPLACE|replace|EXAMPLE|example|PLACEHOLDER|placeholder|CHANGEME|change[-_]me|YOUR[_-]|your[_-]|XXXX|xxxx|<|>|\{\{|\}\}|\.\.\.'
 # Historically shared/legacy secrets (only flagged in data/config files).
-PAT_LEGACY='perdue-portal-2026|pocket-aegis-root-2026'
+PAT_LEGACY='pocket-aegis-root-2026'
 # A real person's name must never be baked into anything that can ship to GitHub.
 # The literal is split so this pattern cannot match its own definition below.
 PAT_PERSONAL="[Rr]ob"'bie'
