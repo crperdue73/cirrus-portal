@@ -43,7 +43,8 @@
     padding: 40px 36px; width: 340px; text-align: center;
     box-shadow: 0 20px 60px rgba(0,0,0,.5);
   }
-  .login-card .logo { font-size: 44px; }
+  .login-card .logo { line-height: 0; }
+  .login-card .logo img { width: 96px; height: 96px; display: block; margin: 0 auto; }
   .login-card h1 { font-size: 22px; margin: 12px 0 4px; }
   .login-card p { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
   .login-card input {
@@ -606,7 +607,7 @@
 <!-- Login -->
 <div id="login">
   <div class="login-card">
-    <div class="logo">🐯</div>
+    <div class="logo"><img src="/logo.png" alt="Cirrus Portal" width="96" height="96"></div>
     <h1>Cirrus Portal</h1>
     <p>Sign in with your portal account.</p>
     <input type="text" id="loginUser" placeholder="Username" autocomplete="username">

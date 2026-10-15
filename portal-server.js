@@ -4178,6 +4178,11 @@ const requestListener = (req, res) => {
     return serveFile(path.join(DIR, 'portal.html'), 'text/html; charset=utf-8', res);
   }
 
+  // Branding assets (login logo and friends)
+  if (req.method === 'GET' && (url.pathname === '/logo.png' || url.pathname === '/favicon.ico')) {
+    return serveFile(path.join(DIR, 'logo.png'), 'image/png', res);
+  }
+
   // Nexus web surface (Cirrus Core — Spark lab control dashboard)
   if (req.method === 'GET' && (url.pathname === '/nexus' || url.pathname === '/nexus.html')) {
     return serveFile(path.join(DIR, 'nexus.html'), 'text/html; charset=utf-8', res);
