@@ -1,4 +1,6 @@
-# Cirrus Portal 🐯
+# Cirrus Portal
+
+<p align="center"><img src="logo.png" alt="Cirrus Portal" width="120"></p>
 
 **Mission control for your OpenClaw fleet.** A browser console that talks
 **directly to OpenClaw agents** — no Telegram, no channel plugins. Open it, pick
