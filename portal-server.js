@@ -23,6 +23,7 @@ const http = require('http');
 const https = require('https');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const crypto = require('crypto');
 
 // ── Config ────────────────────────────────────────────────────────────────
@@ -90,6 +91,7 @@ const DEFAULTS = {
   // Compliance + abuse controls (plan item 19)
   auditRetentionDays: 90,      // audit entries older than this are pruned (0 = keep forever)
   auditMaxBytes: 1024 * 1024,  // hard size cap; trimmed to the newest entries past it
+  auditTrimTargetBytes: 0,     // trim DOWN TO this once the cap is crossed (0 = half the cap)
   rateLimitPerMinute: 300,     // per-IP request budget for every non-probe route
   rateLimitBurst: 60,          // extra allowance above the steady rate, per window
   maxBodyBytes: 1024 * 1024,   // reject JSON request bodies larger than this (413)
@@ -120,10 +122,21 @@ const DEFAULTS = {
   agentDmAwaitReplyMs: 120000,    // max time to hold a sync DM for its reply
   agentDmSyncMaxConcurrent: 20,   // max concurrent sync (awaitReply) holds
   // Cross-server agent DM loop safety (plan item 4d) — the loop-suppression
-  // layers. A DM chains `hops` off the recent reverse DM (past DM_HOPS_MAX the
-  // send is refused); a per-pair budget bounds one conversation; a fleet-wide
-  // circuit breaker covers the whole fleet; a human interjection resets both.
+  // layers. A DM chains `hops` off the recent reverse DM within the same
+  // exchange (past agentDmHopMax the send is refused, and the exchange expires
+  // after an idle gap); a per-pair rate budget bounds message velocity; a
+  // fleet-wide circuit breaker covers the whole fleet; a human interjection
+  // resets both.
   agentDmHopWindowMs: 600000,        // a reply chains hops only if the reverse DM is this recent
+  // 4d revision (2026-10-25, per Robbie) -- the hop counter used to be a
+  // hardcoded DM_HOPS_MAX=3 counted per PAIR across the whole window, so a
+  // multi-person thread (A->B->C->B->A) exhausted it by design. The bound is
+  // now (a) configurable and (b) counted per EXCHANGE ROOT: a reply inherits
+  // the root of the DM it answers, chaining only if that root is fresh and
+  // the root does not already contain your ref (a repeat sender starts a new
+  // exchange, so real infinite ping-pong A->B->A->B is still cut).
+  agentDmHopMax: 25,                 // cap on chained replies inside one exchange
+  agentDmHopRootWindowMs: 1800000,   // idle before an exchange expires: 30 min
   agentDmPairRatePerMinute: 30,      // per-pair (direction-insensitive) DM budget
   agentDmPairBurst: 15,              // extra allowance above the steady per-pair rate
   agentDmCircuitMaxPerMinute: 300,   // fleet-wide DM budget; exceeding it opens the circuit
@@ -288,6 +301,7 @@ function loadConfig() {
     PORTAL_SESSION_IDLE_MINUTES: 'sessionIdleMinutes',
     PORTAL_AUDIT_RETENTION_DAYS: 'auditRetentionDays',
     PORTAL_AUDIT_MAX_BYTES: 'auditMaxBytes',
+    PORTAL_AUDIT_TRIM_TARGET_BYTES: 'auditTrimTargetBytes',
     PORTAL_RATE_LIMIT_PER_MINUTE: 'rateLimitPerMinute',
     PORTAL_RATE_LIMIT_BURST: 'rateLimitBurst',
     PORTAL_MAX_BODY_BYTES: 'maxBodyBytes',
@@ -303,6 +317,8 @@ function loadConfig() {
     PORTAL_AGENT_DM_AWAIT_REPLY_MS: 'agentDmAwaitReplyMs',
     PORTAL_AGENT_DM_SYNC_MAX_CONCURRENT: 'agentDmSyncMaxConcurrent',
     PORTAL_AGENT_DM_HOP_WINDOW_MS: 'agentDmHopWindowMs',
+    PORTAL_AGENT_DM_HOP_MAX: 'agentDmHopMax',
+    PORTAL_AGENT_DM_HOP_ROOT_WINDOW_MS: 'agentDmHopRootWindowMs',
     PORTAL_AGENT_DM_PAIR_RATE_PER_MINUTE: 'agentDmPairRatePerMinute',
     PORTAL_AGENT_DM_PAIR_BURST: 'agentDmPairBurst',
     PORTAL_AGENT_DM_CIRCUIT_MAX_PER_MINUTE: 'agentDmCircuitMaxPerMinute',
@@ -2194,15 +2210,35 @@ function canAccessSession(user, sessionKey) {
 // held locally and never leaves the host. Two bounds keep it finite:
 //   • auditRetentionDays — entries older than the window are pruned (0 = keep)
 //   • auditMaxBytes      — hard size cap; trimmed to the newest entries past it
+//   • auditTrimTargetBytes — what a crossing trims DOWN TO, so the rewrite is
+//                          amortised over the gap instead of running every append
 // Pruning runs at boot, on a timer, and after an append once the file crosses
 // the size cap. Always keeps at least the newest AUDIT_KEEP_MIN entries so a
 // burst of malformed lines can never empty the trail.
 const AUDIT_KEEP_MIN = 500;
+// Byte cap: fine to exceed briefly — the prune is amortised, not per-line.
 
+// auditTrimTargetBytes — the size pruneAudit() trims DOWN TO (default: half of
+// auditMaxBytes, floor 64 KB). This gap is what makes the cap amortised: past
+// the cap we trim well below it, so the next 500 KB of appends never touch a
+// multi-megabyte rewrite. Set it equal to auditMaxBytes to restore the old
+// trim-to-the-line behaviour (and the old per-append O(file) cost with it).
 function auditRetentionDays() { return Math.max(0, Number(CONFIG.auditRetentionDays) || 0); }
 function auditMaxBytes() { return Math.max(64 * 1024, Number(CONFIG.auditMaxBytes) || 1024 * 1024); }
+function auditTrimTargetBytes() {
+  const cap = auditMaxBytes();
+  const want = Number(CONFIG.auditTrimTargetBytes) || 0;
+  if (want > 0) return Math.min(Math.max(64 * 1024, want), cap);
+  return Math.max(64 * 1024, Math.floor(cap / 2));
+}
 
-function auditAppend(entry) { fs.appendFileSync(AUDIT_PATH, JSON.stringify(entry) + '\n'); }
+// Returns the exact line written so the caller can keep AUDIT_SIZE honest
+// without a second stat().
+function auditAppend(entry) {
+  const line = JSON.stringify(entry) + '\n';
+  fs.appendFileSync(AUDIT_PATH, line);
+  return line;
+}
 
 // Rewrite the audit file applying both bounds. Returns the number of entries
 // removed. Safe to call with no file (no-op). Never throws.
@@ -2217,16 +2253,69 @@ function pruneAudit(now = Date.now()) {
     let kept = cutoff > 0 ? lines.filter((l) => {
       try { const e = JSON.parse(l); return !e.ts || e.ts >= cutoff; } catch { return false; }
     }) : lines.slice();
+    // Trim down to the TARGET, not to the cap — see auditTrimTargetBytes().
+    // Byte accounting is kept incrementally so this stays O(n) in lines, never
+    // O(n²) in JSON.stringify calls (the first version of this fix re-serialised
+    // the whole array once per removed line, which turned a 5 MB prune into a
+    // multi-minute event loop stall — caught because the file did not shrink).
     const cap = auditMaxBytes();
-    while (kept.length > AUDIT_KEEP_MIN && Buffer.byteLength(kept.join('\n') + '\n', 'utf8') > cap) kept.shift();
+    const target = auditTrimTargetBytes();
+    const sizes = kept.map((l) => Buffer.byteLength(l, 'utf8') + 1);
+    let bytes = sizes.reduce((a, b) => a + b, 0);
+    let first = 0;
+    while (kept.length - first > AUDIT_KEEP_MIN && bytes > target) {
+      bytes -= sizes[first];
+      first++;
+    }
+    if (first > 0) kept = kept.slice(first);
+    if (bytes > cap) kept = kept.slice(0, AUDIT_KEEP_MIN);
     removed = lines.length - kept.length;
     if (removed > 0) {
-      const tmp = AUDIT_PATH + '.tmp';
-      fs.writeFileSync(tmp, kept.length ? kept.join('\n') + '\n' : '', { mode: 0o600 });
-      fs.renameSync(tmp, AUDIT_PATH);
+      // Atomic rewrite: write a temp file then rename over the log.
+      // WHY os.tmpdir() and not a sibling of AUDIT_PATH: the portal ships with
+      // `read_only: true` and the audit log as a FILE bind-mount, so the image
+      // rootfs (/app) is not writable — a sibling `<log>.tmp` gets EROFS and the
+      // prune silently no-ops. Silent, because pruneAudit's catch is deliberately
+      // broad (maintenance must never break a request). Net effect: the log grows
+      // forever and every audited request pays for it.
+      // And why NOT rename (this is the part that burned a whole diagnostic pass):
+      // /tmp is a tmpfs and the log is a bind mount — two different devices, so
+      // rename() fails EXDEV no matter what permissions you fix. Cross-device
+      // cannot be renamed; it can only be copied into. So: build the trimmed file
+      // in tmpfs, then WRITE THROUGH the mount (truncate + write in place, keeping
+      // the inode and the container's view of the mount), then unlink the temp.
+      const tmp = path.join(os.tmpdir(), `portal-audit.${process.pid}.tmp`);
+      const body = kept.length ? kept.join('\n') + '\n' : '';
+      fs.writeFileSync(tmp, body, { mode: 0o600 });
+      fs.writeFileSync(AUDIT_PATH, body, { mode: 0o600 });
+      fs.unlinkSync(tmp);
     }
-  } catch (e) { /* audit maintenance must never break the portal */ }
+  } catch (e) {
+    // Deliberately broad: audit maintenance must never break a request. But it
+    // must not be silent either — a prune that never fires is invisible until
+    // the log is multi-gigabyte. Log once per distinct error code.
+    if (!pruneAuditWarned.has(e.code || e.message)) {
+      pruneAuditWarned.add(e.code || e.message);
+      console.warn(`[portal] audit prune failed (${e.code || e.message}) — log will grow unbounded`);
+    }
+  }
   return removed;
+}
+const pruneAuditWarned = new Set();
+
+// Cached audit size — the prune check used to stat() on EVERY audited call,
+// and pruneAudit() used to rewrite the whole file on the very next append after
+// crossing the cap. Both are synchronous and both sit on the request path, so a
+// fat audit log made every agent call pay for it: with a ~1.3 MB log, /api/agent/*
+// measured 4-15 s; with a trimmed log, 57 ms. Same request, same code, different
+// file size. Audit must never slow a request — so: size is tracked in memory
+// (seeded once at boot), and the prune is amortised via auditTrimTargetBytes().
+let AUDIT_SIZE = null; // bytes; null = not yet seeded
+function auditSize() {
+  if (AUDIT_SIZE == null) {
+    try { AUDIT_SIZE = fs.statSync(AUDIT_PATH).size; } catch { AUDIT_SIZE = 0; }
+  }
+  return AUDIT_SIZE;
 }
 
 function audit(action, username, role, detail) {
@@ -2238,9 +2327,18 @@ function audit(action, username, role, detail) {
   };
   if (detail) entry.detail = detail;
   try {
-    auditAppend(entry);
-    // keep the file bounded (size cap; also enforces the age window)
-    if (fs.statSync(AUDIT_PATH).size > auditMaxBytes()) pruneAudit();
+    const size = Buffer.byteLength(auditAppend(entry), 'utf8');
+    AUDIT_SIZE = auditSize() + size;
+    // keep the file bounded (size cap; also enforces the age window). The stat()
+    // reconcile matters: if the file was shrunk or rotated under us, our cached
+    // size is a lie and the next prune would never fire.
+    let truth = null;
+    try { truth = fs.statSync(AUDIT_PATH).size; } catch { truth = 0; }
+    if (truth !== AUDIT_SIZE) AUDIT_SIZE = truth;
+    if (AUDIT_SIZE > auditMaxBytes()) {
+      pruneAudit();
+      try { AUDIT_SIZE = fs.statSync(AUDIT_PATH).size; } catch { AUDIT_SIZE = 0; }
+    }
   } catch (e) { /* audit must never break the portal */ }
 }
 
@@ -2843,7 +2941,21 @@ function boardIdentFromAgent(rec) {
 // (4d); `awaitReply` asks the router to hold a sync request (4c); `noRelay`
 // marks a message the recipient must not relay on to a third party (4d).
 const DM_KEEP_MIN = 10;
-const DM_HOPS_MAX = 3;        // hard loop bound (plan item 4d) — clamped by normalization
+// (plan item 4d, revised 2026-10-25) Two numbers, deliberately distinct:
+//   DM_HOPS_CEILING -- clamp used by normalizeDm on load; bounds a corrupt or
+//                     hostile hop value no matter what the config says.
+//   dmHopsMax()    -- the EFFECTIVE bound at send time, from CONFIG.agentDmHopMax.
+// The old code used one hardcoded 3 for both, which made the cap unraisable.
+const DM_HOPS_CEILING = 100;
+function dmHopsMax() {
+  const n = Number(CONFIG.agentDmHopMax);
+  return Math.max(1, Math.min(DM_HOPS_CEILING, Number.isFinite(n) && n > 0 ? Math.floor(n) : 25));
+}
+// How long an exchange stays open -- after this, a reply starts a fresh root.
+function dmHopRootWindowMs() {
+  const n = Number(CONFIG.agentDmHopRootWindowMs);
+  return Math.max(60000, Number.isFinite(n) && n > 0 ? n : 1800000);
+}
 const DM_TEXT_MAX = 8000;     // per-message body cap (matches board posts)
 const DM_STATES = new Set(['queued', 'delivered', 'replied', 'failed']);
 
@@ -3103,7 +3215,14 @@ function normalizeDm(d) {
   if (!from || !to || !text) return null; // a DM needs a sender, a recipient and a body
   const state = DM_STATES.has(String(d.state)) ? String(d.state) : 'queued';
   const hopsRaw = Number(d.hops);
-  const hops = Math.max(0, Math.min(DM_HOPS_MAX, Number.isFinite(hopsRaw) ? Math.floor(hopsRaw) : 0));
+  const hops = Math.max(0, Math.min(DM_HOPS_CEILING, Number.isFinite(hopsRaw) ? Math.floor(hopsRaw) : 0));
+  // Exchange root (4d revision): id of the DM that started this exchange, and
+  // the refs already seen inside it (senders + recipients). Null/[] on a fresh
+  // send; derived by dmRoute when a reply chains.
+  const hopRoot = typeof d.hopRoot === 'string' ? d.hopRoot.slice(0, 64) : null;
+  const hopSeen = Array.isArray(d.hopSeen)
+    ? Array.from(new Set(d.hopSeen.map((x) => String(x == null ? '' : x).toLowerCase().slice(0, 200)).filter(Boolean))).slice(0, 64)
+    : [];
   return {
     id: String(d.id || '').slice(0, 64),
     from,
@@ -3117,6 +3236,8 @@ function normalizeDm(d) {
     replyTs: Number(d.replyTs) || 0,
     deliveredTs: Number(d.deliveredTs) || 0,
     hops,
+    hopRoot,
+    hopSeen,
     awaitReply: d.awaitReply === true,
     noRelay: d.noRelay === true,
     error: d.error ? String(d.error).slice(0, 300) : null,
@@ -3258,13 +3379,29 @@ async function dmRoute({ to, text, awaitReply, noRelay } = {}, fromIdent) {
     if (pr) return { error: 'agent DM pair rate limit exceeded — slow down', status: 429, retryAfter: pr.retryAfter, pairLimited: true, limit: pr.limit };
   }
 
-  // 4d — hop counter. A send that answers a RECENT reverse DM carries hops+1; a
-  // fresh (non-reply) send starts at 0, so a new thread — or a human — resets
-  // the chain. Past DM_HOPS_MAX the send is refused outright.
+  // 4d (revised 2026-10-25) -- hop counter, rooted per EXCHANGE and expiring
+  // on idle. The old rule (hops = reverse.hops + 1, cap 3, per pair) killed
+  // ANY two-person conversation at its fifth message and kept it dead for the
+  // whole window; a busy multi-person thread hit it even faster. The counter
+  // now measures depth inside one live exchange, the cap is configurable
+  // (agentDmHopMax, default 25), and a pause longer than dmHopRootWindowMs
+  // starts a fresh exchange. Flood protection lives in the per-pair rate
+  // limiter and the circuit breaker above, which are rate-based and don't
+  // punish a human-paced conversation.
+  const selfRef = String(fromIdent.ref).toLowerCase();
   const thread = dmRecentReverse(DM.dms, toRef, fromIdent.ref, now);
-  const hops = thread ? thread.hops + 1 : 0;
-  if (hops > DM_HOPS_MAX) {
-    return { error: `agent DM loop bound reached (hop ${hops} > ${DM_HOPS_MAX})`, status: 429, loopBlocked: true, hops, max: DM_HOPS_MAX };
+  const threadLive = !!thread
+    && !!thread.hopRoot
+    && (now - (thread.ts || 0)) <= dmHopRootWindowMs();
+  const hops = threadLive ? thread.hops + 1 : 0;
+  const hopRoot = threadLive ? thread.hopRoot : newDmId();
+  const hopSeen = Array.from(new Set([
+    ...(threadLive && Array.isArray(thread.hopSeen) ? thread.hopSeen : []),
+    selfRef,
+  ])).slice(0, 64);
+  const hopsMax = dmHopsMax();
+  if (hops > hopsMax) {
+    return { error: `agent DM loop bound reached (hop ${hops} > ${hopsMax} in exchange ${hopRoot}) -- start a new message or wait for the exchange to expire`, status: 429, loopBlocked: true, hops, max: hopsMax };
   }
 
   // 4d — no-relay: if the sender's most recent inbound was flagged no-relay, it
@@ -3284,7 +3421,9 @@ async function dmRoute({ to, text, awaitReply, noRelay } = {}, fromIdent) {
     text: String(text),
     ts: now,
     state: 'queued',
-    hops,                  // 0 for a fresh send; +1 per answer to a recent reverse DM
+    hops,                  // 0 for a fresh exchange; +1 per chained reply within one
+    hopRoot,               // id of the DM that started this exchange
+    hopSeen,               // refs already in this exchange (loop + fan-out guard)
     noRelay: relay,        // recipient may reply to the sender, not relay onward
     awaitReply: sync,
   });
@@ -4835,7 +4974,7 @@ async function handleApi(req, res, url) {
     const limit = Math.min(parseInt(url.searchParams.get('limit') || '100', 10) || 100, 500);
     return json(res, 200, {
       entries: readAudit(limit),
-      retention: { days: auditRetentionDays(), maxBytes: auditMaxBytes() },
+      retention: { days: auditRetentionDays(), maxBytes: auditMaxBytes(), trimTargetBytes: auditTrimTargetBytes() },
     });
   }
 
@@ -4844,8 +4983,9 @@ async function handleApi(req, res, url) {
   if (p === '/api/audit/prune' && req.method === 'POST') {
     if (!requireRole(user, 'admin')) return json(res, 403, { error: 'admins only' });
     const removed = pruneAudit();
+    try { AUDIT_SIZE = fs.statSync(AUDIT_PATH).size; } catch { AUDIT_SIZE = 0; }
     audit('audit_prune', user.username, user.role, { removed });
-    return json(res, 200, { ok: true, removed, retention: { days: auditRetentionDays(), maxBytes: auditMaxBytes() } });
+    return json(res, 200, { ok: true, removed, retention: { days: auditRetentionDays(), maxBytes: auditMaxBytes(), trimTargetBytes: auditTrimTargetBytes() } });
   }
 
   // ── Agent API tokens (plan item 1a) ─────────────────────────────────
