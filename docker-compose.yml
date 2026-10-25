@@ -4,6 +4,12 @@ services:
   cirrus-portal:
     build: .
     container_name: cirrus-portal
+    # Opt-in flags only. The bootstrap admin password is NOT set here:
+    # it lives in the bind-mounted portal-secrets.json (0600), which is
+    # the documented path and keeps this file safe to publish.
+    environment:
+      PORTAL_PUBLIC_BIND: "1"
+      PORTAL_INSECURE_PLAINTEXT: "1"
     restart: unless-stopped
     # Host networking: the portal must reach the OpenClaw gateway on the
     # host's loopback (ws://127.0.0.1:18790). With host net, UFW still
@@ -25,6 +31,10 @@ services:
       - ./portal-rooms.json:/app/portal-rooms.json
       # CI30 context injection store (course + per-user context)
       - ./portal-context.json:/app/portal-context.json
+      # Board + agent-DM stores (were unmounted -> EROFS warnings on the
+      # read-only rootfs).
+      - ./portal-board.json:/app/portal-board.json
+      - ./portal-agent-dm.json:/app/portal-agent-dm.json
     # Port/bind come from portal-config.json (written by bootstrap.sh).
     # Do NOT set PORT/BIND here — env overrides beat the config file in
     # loadConfig(), which breaks per-server port choices. Overrides for
@@ -49,6 +59,12 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    healthcheck:
+      test: ["CMD", "node", "healthcheck.js"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     logging:
       driver: json-file
       options:
