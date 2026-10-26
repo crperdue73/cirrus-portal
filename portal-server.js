@@ -871,7 +871,19 @@ async function handleAgentApi(req, res, url) {
     }
     const dmStatus = r.error ? (r.status || 400) : (r.sync ? 200 : 202);
     audit('agent_call', rec.agentId, 'agent', { ...callDetail, status: dmStatus });
-    if (r.error) return json(res, r.status || 400, { error: r.error });
+    if (r.error) {
+      // Carry the refusal discriminator on the wire. Without it a hop-bound
+      // 429, a pair-rate 429 and a circuit-breaker 503 are indistinguishable to
+      // the caller -- it cannot know whether to back off, wait, or open a new
+      // exchange. Additive to the original `{ error }` shape.
+      const body = { error: r.error };
+      for (const k of ['loopBlocked', 'hops', 'max', 'pairLimited', 'circuitOpen',
+        'relayBlocked', 'unrouted', 'retryAfter', 'limit', 'sync']) {
+        if (r[k] !== undefined) body[k] = r[k];
+      }
+      if (r.retryAfter && (r.status === 429 || r.status === 503)) res.setHeader('Retry-After', String(r.retryAfter));
+      return json(res, r.status || 400, body);
+    }
     // Sync (4c): 200 with the held reply inline; async: 202 accepted. Either
     // way the caller is told the current DM privacy policy (plan item 4e).
     const vinfo = dmVisibilityInfo();
@@ -3393,7 +3405,24 @@ async function dmRoute({ to, text, awaitReply, noRelay } = {}, fromIdent) {
   const threadLive = !!thread
     && !!thread.hopRoot
     && (now - (thread.ts || 0)) <= dmHopRootWindowMs();
-  const hops = threadLive ? thread.hops + 1 : 0;
+  // Depth must come from the DEEPEST hop already recorded in this live
+  // exchange, not merely from the last reverse DM. A refused send is never
+  // stored, so `thread` can still point at a stale shallower row: without this
+  // the bound is re-satisfied forever by alternating between two parties that
+  // are already at the ceiling (each 429 followed by an accepted reply at the
+  // same hop number).
+  const liveRoot = threadLive ? thread.hopRoot : null;
+  let exchangeHops = 0;
+  if (liveRoot) {
+    for (let i = DM.dms.length - 1; i >= 0; i--) {
+      const d = DM.dms[i];
+      if ((d.ts || 0) < now - dmHopRootWindowMs()) break;
+      if (d.hopRoot !== liveRoot) continue;
+      const h = Number(d.hops);
+      if (Number.isFinite(h) && h > exchangeHops) exchangeHops = Math.floor(h);
+    }
+  }
+  const hops = threadLive ? exchangeHops + 1 : 0;
   const hopRoot = threadLive ? thread.hopRoot : newDmId();
   const hopSeen = Array.from(new Set([
     ...(threadLive && Array.isArray(thread.hopSeen) ? thread.hopSeen : []),

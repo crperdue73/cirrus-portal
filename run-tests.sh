@@ -5,7 +5,7 @@
 #  Runs everything, in one command:
 #    1. the Node test-runner suite in test/ (auth · RBAC · rooms · config ·
 #       route smoke): `node --test test/*.test.js`
-#    2. the standalone smoke tests in the repo root (test-*.js): credentials ·
+#    2. the standalone smoke tests in test/ (test-*.js): credentials ·
 #       secrets · setup · tls · network · auth · container · installer · docs ·
 #       legal · public-docs · release · migrate · backup · e2e · compliance
 #
@@ -38,9 +38,9 @@ else
 fi
 
 echo
-echo "── standalone smoke tests (test-*.js) ──────────────────────────────"
+echo "── standalone smoke tests (test/test-*.js) ─────────────────────────"
 shopt -s nullglob
-suite=(test-*.js)
+suite=(test/test-*.js)
 shopt -u nullglob
 if [ "${#suite[@]}" -eq 0 ]; then
   echo "✗ no standalone tests found"
