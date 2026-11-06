@@ -175,7 +175,21 @@ let pass = 0;
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cirrus-rel-'));
   // Copy the working tree (tracked + the new untracked docs), minus VCS/artifacts.
   const tarBuf = execFileSync('tar', ['-cf', '-', '--exclude=.git', '--exclude=dist',
-    '--exclude=backups', '--exclude=node_modules', '--exclude=*.log', '.'],
+    '--exclude=backups', '--exclude=node_modules', '--exclude=*.log',
+    // release.sh already refuses to package runtime state, so don't read it
+    // here either -- a permission error on a 0600 state file would abort a
+    // test that has nothing to do with permissions.
+    // Keep the shipped example config; everything else portal-*.json is state.
+    '--exclude=portal-config.json', '--exclude=portal-users.json',
+    '--exclude=portal-secrets.json', '--exclude=portal-device.json',
+    '--exclude=portal-context.json', '--exclude=portal-rooms.json',
+    '--exclude=portal-board.json', '--exclude=portal-agent-dm.json',
+    '--exclude=portal-credentials.txt', '--exclude=portal-first-run.txt',
+    '--exclude=portal-audit.log', '--exclude=portal-*.tmp',
+    // Same reasons as .git: VCS metadata and CI config say nothing about
+    // whether release.sh tags correctly, and a fresh git init inside either
+    // makes every later git call fail with "not in a git directory".
+    '.gitignore', '--exclude=.github', '.'],
     { cwd: SRC, maxBuffer: 64 * 1024 * 1024 });
   execFileSync('tar', ['-xf', '-'], { cwd: tmp, input: tarBuf });
 

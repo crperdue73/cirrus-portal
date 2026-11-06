@@ -128,7 +128,7 @@ const DEFAULTS = {
   // fleet-wide circuit breaker covers the whole fleet; a human interjection
   // resets both.
   agentDmHopWindowMs: 600000,        // a reply chains hops only if the reverse DM is this recent
-  // 4d revision (2026-10-25, per Robbie) -- the hop counter used to be a
+  // 4d revision (2026-10-25, operator request) -- the hop counter used to be a
   // hardcoded DM_HOPS_MAX=3 counted per PAIR across the whole window, so a
   // multi-person thread (A->B->C->B->A) exhausted it by design. The bound is
   // now (a) configurable and (b) counted per EXCHANGE ROOT: a reply inherits
